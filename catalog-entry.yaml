@@ -1,0 +1,23 @@
+# Entry for hermes-agent/plugin-catalog/skillhex.yaml (pin `sha` to the release commit when submitting)
+name: skillhex
+repo: https://github.com/zorrobyte/skillhex
+sha: ""
+description: Evidence-gated skill evolution (SkillHEX, arXiv:2608.05628). Captures skill-guided
+  turns; when the user's next message or a task checker says the answer was wrong, it writes failure
+  hypotheses and executable self-verifier tests, searches over skill rewrites in throwaway profiles,
+  and applies only a rewrite the evidence supports (through the skill ledger, reversible). Disclosure —
+  sends transcript excerpts of failed skill-guided turns to the model configured as
+  auxiliary.skillhex_reflector (your main model by default); runs candidate attempts on
+  auxiliary.skillhex_executor in isolated profiles; honors skills.write_approval by staging instead of writing.
+maintainer: zorrobyte
+tier: community
+category: skills
+requires_hermes: '>=0.21'
+docs_url: https://github.com/zorrobyte/skillhex#readme
+version: 0.2.0
+platforms: []
+capabilities:
+  provides_tools: [skillhex]
+  provides_hooks: [on_skill_lifecycle, post_tool_call, pre_tool_call, pre_llm_call, post_llm_call, on_session_end]
+  provides_middleware: []
+  requires_env: []

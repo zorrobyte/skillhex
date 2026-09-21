@@ -1,8 +1,13 @@
 name: skillhex
-version: 0.1.0
-description: "Evidence-gated skill evolution: captures skill-guided attempts, tests failure hypotheses, searches over skill patches, applies only what the evidence supports."
+version: 0.2.0
+manifest_version: 2
+api_version: 1
+description: "Evidence-gated skill evolution (SkillHEX, arXiv:2608.05628): captures skill-guided turns, tests failure hypotheses, searches over skill rewrites in throwaway profiles, applies only what the evidence supports. Automatic, logged, reversible."
 author: "Ross Fisher (@zorrobyte), Claude"
 license: MIT
+homepage: https://github.com/zorrobyte/skillhex
+tags: [skills, self-improvement, evaluation, background]
+requires_hermes: ">=0.21"
 provides_hooks:
   - on_skill_lifecycle
   - post_tool_call
@@ -45,3 +50,7 @@ config_schema:
     type: int
     default: 52428800
     description: "Skip the working-directory snapshot (taken when a skill loads, so evaluation starts from the pre-attempt state) above this size."
+  changes_window_days:
+    type: float
+    default: 7
+    description: "How many days of skillhex changes the agent is told about at session start (so it can explain or undo them)."
