@@ -91,16 +91,15 @@ HERMES_HOME=~/skillhex-home hermes skillhex report
 
 ## What differs from the paper, deliberately
 
-- Rows are (skill version, episode) so a skill is scored on every recorded episode, not one task.
-- Tests belong to the skill and travel with it as a regression suite.
+- Tests belong to the skill and travel with it as a regression suite that re-runs whenever the skill is loaded for a similar task; a hard failure plus a user "that's wrong" rolls the patch back.
 - The original skill is always a row in the matrix; a no-skill baseline row is planned.
-- Static lint (frontmatter, referenced binaries) gates before an attempt is spent.
+- Static lint (frontmatter, name, completeness) rejects a candidate before an attempt is spent.
 - Outcome from user corrections and checkers only. The acting model's self-report is never a reward.
 
 ## Status
 
 Core and plugin are implemented and unit tested. The Hermes executor and the plugin have been
-exercised live against Muse Spark and a local Qwen3.8-27B. SkillsBench reproduction and
+exercised live against Muse Spark 1.3 (reflection, verification and attempts) on the notes fixture. SkillsBench reproduction and
 SkillFlow transfer evaluation are next.
 
 ## License

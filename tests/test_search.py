@@ -8,6 +8,7 @@ from skillhex.search import SkillSearch, SearchConfig, Task, ReflectionResult, E
 
 ORACLE = 'import json,os\nep=json.load(open(os.path.join(os.environ["SKILLHEX_EPISODE"],"episode.json")))\nok=any("open-meteo" in tc["result"] for tc in ep["tool_calls"])\nprint("SELF_VERIFIER_RESULT="+("PASS" if ok else "FAIL"))\n'
 ALWAYS_PASS = 'print("SELF_VERIFIER_RESULT=PASS")\n'
+FM = "---\nname: weather\ndescription: Forecasts.\n---\n"
 
 
 class FakeExecutor:
@@ -40,8 +41,8 @@ class ScriptedReflector:
         if "nws" in ctx.node.content:
             cands = [{"content": ctx.node.content + " more nws", "rank": 1, "summary": "more NWS", "hypothesis": "H2"}]
         else:
-            cands = [{"content": "skill: use nws", "rank": 1, "summary": "NWS", "hypothesis": "H2"},
-                     {"content": "skill: use open-meteo", "rank": 2, "summary": "Open-Meteo", "hypothesis": "H1"}]
+            cands = [{"content": FM + "skill: use nws", "rank": 1, "summary": "NWS", "hypothesis": "H2"},
+                     {"content": FM + "skill: use open-meteo", "rank": 2, "summary": "Open-Meteo", "hypothesis": "H1"}]
         return ReflectionResult(decision="emit_patch", hypothesis_ops=ops, active_hypothesis_ids=["H1", "H2"],
                                 patch_candidates=cands)
 
@@ -61,7 +62,7 @@ class ScriptedVerifier:
 def make_search(tmp_path, reflector=None, verifier=None, executor=None, **cfg):
     task = Task(id="t1", skill="weather", prompt="14 day forecast", cwd=str(tmp_path))
     return SkillSearch(
-        workdir=tmp_path / "work", task=task, initial_skill="skill: use wttr",
+        workdir=tmp_path / "work", task=task, initial_skill=FM + "skill: use wttr",
         reflector=reflector or ScriptedReflector(), verifier=verifier or ScriptedVerifier(),
         executor=executor or FakeExecutor(), config=SearchConfig(**cfg),
     )
@@ -151,3 +152,18 @@ def test_invalid_tests_are_rejected_with_feedback_and_not_added(tmp_path):
     s.run()
     assert [c.id for c in s.bank.list()] == []
     assert any(fb and "t_bad" in str(fb) for fb in v.feedback)
+
+
+def test_candidates_failing_lint_are_not_expanded(tmp_path):
+    class BadCandidates(ScriptedReflector):
+        def reflect(self, ctx, must_emit):
+            r = super().reflect(ctx, must_emit)
+            r.patch_candidates = [{"content": "# no frontmatter", "rank": 1, "summary": "bad", "hypothesis": "H1"},
+                                  {"content": "---\nname: weather\ndescription: ok.\n---\nuse open-meteo", "rank": 2, "summary": "good", "hypothesis": "H1"}]
+            return r
+    ex = FakeExecutor()
+    s = make_search(tmp_path, reflector=BadCandidates(), executor=ex, K=3, L=1)
+    result = s.run()
+    assert result.passed
+    contents = [n.content for n in s.tree.nodes.values()]
+    assert "# no frontmatter" not in contents

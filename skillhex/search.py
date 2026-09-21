@@ -18,6 +18,7 @@ from .bank import TestBank, TestCase
 from .episodes import EpisodeStore
 from .evidence import EvidenceMatrix
 from .hypotheses import HypothesisStore, Hypothesis
+from .lint import lint_skill
 from .models import Episode
 from .scoring import score_row
 from .tree import PatchTree, Node
@@ -227,6 +228,16 @@ class SkillSearch:
                 candidates = res.patch_candidates
                 break
             self._self_verify(node, res.active_hypothesis_ids)
+        kept = []
+        for c in candidates:
+            errors, warnings = lint_skill(c.get("content", ""), self.task.skill)
+            if errors:
+                log.info("rejected candidate (%s): %s", c.get("summary", "")[:60], "; ".join(errors))
+                continue
+            if warnings:
+                c["summary"] = (c.get("summary", "") + " [lint: " + "; ".join(warnings) + "]")[:300]
+            kept.append(c)
+        candidates = kept
         if not candidates:
             self.tree.mark_exhausted(node.id)
             return False

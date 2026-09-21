@@ -5,14 +5,14 @@ from skillhex.episodes import EpisodeStore
 from skillhex.evolve import evolve_skill
 from skillhex.models import Episode, ToolCall
 from skillhex.search import ReflectionResult, ExecResult
-from test_search import ScriptedReflector, ScriptedVerifier, FakeExecutor
+from test_search import ScriptedReflector, ScriptedVerifier, FakeExecutor, FM
 
 
 class NoLLM:
     usage = {"calls": 0}
 
 
-def setup_home(tmp_path, skill_text="skill: use wttr"):
+def setup_home(tmp_path, skill_text=FM + "skill: use wttr"):
     hh = tmp_path / "hermes"
     (hh / "skills" / "weather").mkdir(parents=True)
     (hh / "skills" / "weather" / "SKILL.md").write_text(skill_text)
@@ -31,7 +31,7 @@ def test_official_pass_applies_patch_and_writes_report(tmp_path):
                        reflector=ScriptedReflector(), verifier=ScriptedVerifier())
     assert res["passed"] and res["decision"].startswith("apply")
     assert "open-meteo" in (hh / "skills" / "weather" / "SKILL.md").read_text()
-    assert (hh / "skills" / "weather" / "SKILL.md.skillhex-prev").read_text() == "skill: use wttr"
+    assert (hh / "skills" / "weather" / "SKILL.md.skillhex-prev").read_text() == FM + "skill: use wttr"
     report = Path(res["report"]).read_text()
     assert "Evidence matrix" in report and "Patch tree" in report
     assert (home / "runs" / "weather.evolved.json").exists()
@@ -47,7 +47,7 @@ def test_no_pass_and_low_score_keeps_original(tmp_path):
     res = evolve_skill(home, hh, "weather", budget=2, llm=NoLLM(), executor=NeverRight(),
                        reflector=ScriptedReflector(), verifier=ScriptedVerifier())
     assert not res["passed"] and res["decision"].startswith("keep")
-    assert (hh / "skills" / "weather" / "SKILL.md").read_text() == "skill: use wttr"
+    assert (hh / "skills" / "weather" / "SKILL.md").read_text() == FM + "skill: use wttr"
 
 
 def test_no_checker_high_evidence_score_applies(tmp_path):
@@ -72,7 +72,7 @@ def test_bundled_skill_is_overridden_at_profile_level(tmp_path):
     home, hh = setup_home(tmp_path)
     bundled = tmp_path / "bundled" / "weather"
     bundled.mkdir(parents=True)
-    (bundled / "SKILL.md").write_text("skill: use wttr")
+    (bundled / "SKILL.md").write_text(FM + "skill: use wttr")
     (hh / "skills" / "weather" / "SKILL.md").unlink()
     (hh / "skills" / "weather").rmdir()
     import skillhex.evolve as ev
@@ -88,7 +88,7 @@ def test_bundled_skill_is_overridden_at_profile_level(tmp_path):
         ev.find_skill_dir = orig
     assert res["decision"].startswith("apply")
     assert "open-meteo" in (hh / "skills" / "weather" / "SKILL.md").read_text()
-    assert (bundled / "SKILL.md").read_text() == "skill: use wttr"
+    assert (bundled / "SKILL.md").read_text() == FM + "skill: use wttr"
 
 
 def test_checker_grades_pending_episode_before_search(tmp_path):

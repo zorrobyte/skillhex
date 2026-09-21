@@ -32,6 +32,7 @@ from skillhex.models import Episode
 from skillhex.outcome import classify_followup, heuristic_followup
 from skillhex.replay import Cassette, ReplayPolicy
 from skillhex.regress import SkillBank, rollback_skill
+from skillhex.session_state import SessionStore
 
 log = logging.getLogger("skillhex.plugin")
 
@@ -42,6 +43,7 @@ _home: Optional[Path] = None
 _hermes_home: Optional[Path] = None
 _replay: Optional[ReplayPolicy] = None
 _last_by_session: Dict[str, Dict[str, Any]] = {}
+_sessions: Optional[SessionStore] = None
 _lock = threading.Lock()
 
 
@@ -100,6 +102,8 @@ def _write_pending_state() -> None:
 def _on_skill_lifecycle(action: str = "", skill_name: str = "", session_id: str = "", task_id: str = "", **kw):
     if action == "loaded" and skill_name:
         _recorder.skill_loaded(session_id or "", skill_name, task_id or None)
+        if _sessions is not None and session_id:
+            _sessions.add_skill(session_id, skill_name)
 
 
 def _on_post_tool_call(tool_name: str = "", args: Any = None, result: Any = None, session_id: str = "",
@@ -130,7 +134,7 @@ def _on_pre_llm_call(session_id: str = "", user_message: Any = None, is_first_tu
     """The user's next message is the outcome signal for the previous skill-guided turn."""
     if not session_id or is_first_turn:
         return None
-    last = _last_by_session.get(session_id)
+    last = _last_by_session.get(session_id) or (_sessions.last(session_id) if _sessions else None)
     if not last or last.get("resolved"):
         return None
     text = _user_text(user_message).strip()
@@ -151,6 +155,9 @@ def _on_pre_llm_call(session_id: str = "", user_message: Any = None, is_first_tu
             except Exception:  # noqa: BLE001
                 log.debug("skillhex: set_outcome failed", exc_info=True)
         last["resolved"] = True
+        _last_by_session[session_id] = last
+        if _sessions is not None:
+            _sessions.resolve(session_id)
         _write_pending_state()
         if verdict == "fail":
             for skill in last.get("regressed", []):
@@ -165,6 +172,9 @@ def _on_pre_llm_call(session_id: str = "", user_message: Any = None, is_first_tu
 def _on_post_llm_call(session_id: str = "", turn_id: str = "", conversation_history: Any = None,
                       assistant_response: Any = None, user_message: Any = None, model: str = "", **kw):
     force = os.environ.get("SKILLHEX_FORCE_SKILL") or None
+    if _sessions is not None and session_id:
+        for name in _sessions.skills(session_id):
+            _recorder.skill_loaded(session_id, name)
     messages = list(conversation_history or [])
     eps = _recorder.finish_turn(session_id or "", turn_id or None, messages, model, os.getcwd(), force_skill=force)
     if not eps:
@@ -186,9 +196,12 @@ def _on_post_llm_call(session_id: str = "", turn_id: str = "", conversation_hist
                 log.warning("skillhex: regression on %s: hard failures %s", ep.skill, rec["hard_failures"])
         except Exception:  # noqa: BLE001
             log.debug("skillhex: regression check failed", exc_info=True)
-    _last_by_session[session_id or ""] = {"episodes": saved, "prompt": _user_text(user_message) or (eps[0].user_prompt),
-                                          "answer": str(assistant_response or eps[0].final_response), "resolved": False,
+    prompt_text = _user_text(user_message) or eps[0].user_prompt
+    answer_text = str(assistant_response or eps[0].final_response)
+    _last_by_session[session_id or ""] = {"episodes": saved, "prompt": prompt_text, "answer": answer_text, "resolved": False,
                                           "regressed": regressed}
+    if _sessions is not None and session_id:
+        _sessions.set_last(session_id, saved, prompt_text, answer_text, regressed)
     _write_pending_state()
     return None
 
@@ -230,10 +243,15 @@ def _slash(raw_args: str = "") -> str:
     sub = parts[0].lower() if parts else "status"
     note = parts[1] if len(parts) > 1 else ""
     if sub in ("ok", "fail"):
-        for sid, last in _last_by_session.items():
+        pending = list(_last_by_session.items()) + (_sessions.all_unresolved() if _sessions else [])
+        for sid, last in pending:
+            if last.get("resolved"):
+                continue
             for skill, ep_id in last.get("episodes", []):
                 _store.set_outcome(skill, ep_id, "pass" if sub == "ok" else "fail", source="user", note=note or None)
             last["resolved"] = True
+            if _sessions is not None:
+                _sessions.resolve(sid)
         _write_pending_state()
         if sub == "fail":
             _maybe_schedule_evolution(None)
@@ -266,12 +284,13 @@ def _cli_handler(args) -> int:
 
 # ---------------------------------------------------------------------------- register
 def register(ctx) -> None:
-    global _ctx, _store, _home, _hermes_home, _replay
+    global _ctx, _store, _home, _hermes_home, _replay, _sessions
     _ctx = ctx
     _hermes_home = Path(os.environ.get("HERMES_HOME") or "~/.hermes").expanduser()
     _home = Path(os.environ.get("SKILLHEX_CAPTURE_DIR") or (_hermes_home / "skillhex")).expanduser()
     _home.mkdir(parents=True, exist_ok=True)
     _store = EpisodeStore(_home / "episodes")
+    _sessions = SessionStore(_home / "sessions")
     rp = os.environ.get("SKILLHEX_REPLAY")
     if rp and (Path(rp) / "episode.json").exists():
         try:
