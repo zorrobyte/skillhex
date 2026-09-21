@@ -24,3 +24,13 @@ def test_session_ids_are_sanitised_and_missing_is_none(tmp_path):
     s.add_skill("a/b:c", "x")
     assert s.skills("a/b:c") == ["x"]
     assert s.last("nope") is None
+
+
+def test_most_recent_turn_across_sessions_even_if_resolved(tmp_path):
+    s = SessionStore(tmp_path / "sessions")
+    s.set_last("a", episodes=[("notes", "e1")], prompt="p", answer="a", regressed=[])
+    s.set_last("b", episodes=[("weather", "e2")], prompt="p", answer="a", regressed=[])
+    s.resolve("b")
+    sid, last = s.most_recent()
+    assert sid == "b" and last["episodes"] == [["weather", "e2"]]
+    assert SessionStore(tmp_path / "none").most_recent() == (None, None)

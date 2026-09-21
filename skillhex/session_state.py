@@ -58,6 +58,20 @@ class SessionStore:
             d["last"]["resolved"] = True
         self._write(sid, d)
 
+    def most_recent(self) -> Tuple[Optional[str], Optional[Dict[str, Any]]]:
+        """The latest skill-guided turn in any session, judged or not (for /skillhex ok|fail)."""
+        best: Tuple[Optional[str], Optional[Dict[str, Any]]] = (None, None)
+        if self.root.is_dir():
+            for p in self.root.glob("*.json"):
+                try:
+                    d = json.loads(p.read_text())
+                except json.JSONDecodeError:
+                    continue
+                last = d.get("last")
+                if last and (best[1] is None or last.get("at", 0) > best[1].get("at", 0)):
+                    best = (p.stem, last)
+        return best
+
     def all_unresolved(self) -> List[Tuple[str, Dict[str, Any]]]:
         out = []
         if self.root.is_dir():

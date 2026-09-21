@@ -182,19 +182,26 @@ def _on_pre_llm_call(session_id: str = "", user_message: Any = None, is_first_tu
                 _store.set_outcome(skill, ep_id, verdict, source="followup", note=f"{reason}: {text[:300]}")
             except Exception:  # noqa: BLE001
                 log.debug("skillhex: set_outcome failed", exc_info=True)
-        last["resolved"] = True
-        _last_by_session[session_id] = last
-        if _sessions is not None:
-            _sessions.resolve(session_id)
-        _write_pending_state()
+    # the next message is the signal; whatever it said, this turn is judged and never looked at again
+    last["resolved"] = True
+    _last_by_session[session_id] = last
+    if _sessions is not None:
+        _sessions.resolve(session_id)
+    _write_pending_state()
+    if verdict in ("pass", "fail"):
         if verdict == "fail":
-            for skill in last.get("regressed", []):
-                if rollback_skill(_hermes_home, skill):
-                    log.warning("skillhex: rolled back %s (bank regression + user fail)", skill)
-                    with open(_home / "rollbacks.jsonl", "a") as f:
-                        f.write(json.dumps({"skill": skill, "at": time.time(), "note": text[:200]}) + "\n")
-            _maybe_schedule_evolution([s for s, _ in last["episodes"] if s not in last.get("regressed", [])])
+            _on_fail(last, text)
     return None
+
+
+def _on_fail(last: Dict[str, Any], note: str) -> None:
+    """A confirmed failure: roll back a patch the bank already flagged, then schedule evolution for the rest."""
+    for skill in last.get("regressed", []):
+        if rollback_skill(_hermes_home, skill):
+            log.warning("skillhex: rolled back %s (bank regression + user fail)", skill)
+            with open(_home / "rollbacks.jsonl", "a") as f:
+                f.write(json.dumps({"skill": skill, "at": time.time(), "note": note[:200]}) + "\n")
+    _maybe_schedule_evolution([s for s, _ in last["episodes"] if s not in last.get("regressed", [])])
 
 
 def _on_post_llm_call(session_id: str = "", turn_id: str = "", conversation_history: Any = None,
@@ -271,19 +278,24 @@ def _slash(raw_args: str = "") -> str:
     sub = parts[0].lower() if parts else "status"
     note = parts[1] if len(parts) > 1 else ""
     if sub in ("ok", "fail"):
-        pending = list(_last_by_session.items()) + (_sessions.all_unresolved() if _sessions else [])
-        for sid, last in pending:
-            if last.get("resolved"):
-                continue
-            for skill, ep_id in last.get("episodes", []):
+        sid, last = _sessions.most_recent() if _sessions else (None, None)
+        if not last:
+            return "skillhex: no skill-guided turn to mark"
+        marked = []
+        for skill, ep_id in last.get("episodes", []):
+            try:
                 _store.set_outcome(skill, ep_id, "pass" if sub == "ok" else "fail", source="user", note=note or None)
-            last["resolved"] = True
-            if _sessions is not None:
-                _sessions.resolve(sid)
+                marked.append(skill)
+            except Exception:  # noqa: BLE001
+                log.debug("skillhex: set_outcome failed", exc_info=True)
+        last["resolved"] = True
+        _sessions.resolve(sid)
+        if sid in _last_by_session:
+            _last_by_session[sid]["resolved"] = True
         _write_pending_state()
         if sub == "fail":
-            _maybe_schedule_evolution(None)
-        return f"skillhex: marked last skill-guided turn as {sub}"
+            _on_fail(last, note)
+        return f"skillhex: marked the last skill-guided turn ({', '.join(marked) or 'no skill'}) as {sub}"
     if sub == "evolve":
         _maybe_schedule_evolution(None)
         return "skillhex: evolution scheduled (see skillhex/evolve.log)"
