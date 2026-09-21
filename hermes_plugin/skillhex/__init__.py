@@ -16,6 +16,7 @@ from __future__ import annotations
 
 import hashlib
 import json
+import re
 import logging
 import os
 import subprocess
@@ -33,6 +34,7 @@ from skillhex.outcome import classify_followup, heuristic_followup
 from skillhex.replay import Cassette, ReplayPolicy
 from skillhex.regress import SkillBank, rollback_skill
 from skillhex.session_state import SessionStore
+from skillhex.workspace import snapshot_workspace
 
 log = logging.getLogger("skillhex.plugin")
 
@@ -98,12 +100,31 @@ def _write_pending_state() -> None:
         log.debug("skillhex: status write failed", exc_info=True)
 
 
+_snapshots: Dict[str, Optional[str]] = {}
+
+
+def _snapshot_for(session_id: str) -> Optional[str]:
+    """Copy the working directory the first time a skill loads in a session (small workspaces only),
+    so evaluation attempts can start from the pre-attempt state."""
+    if session_id in _snapshots:
+        return _snapshots[session_id]
+    dest = None
+    try:
+        d = snapshot_workspace(os.getcwd(), _home / "snapshots" / re.sub(r"[^A-Za-z0-9_.-]+", "-", session_id)[:80])
+        dest = str(d) if d else None
+    except Exception:  # noqa: BLE001
+        log.debug("skillhex: snapshot failed", exc_info=True)
+    _snapshots[session_id] = dest
+    return dest
+
+
 # ---------------------------------------------------------------------------- hooks
 def _on_skill_lifecycle(action: str = "", skill_name: str = "", session_id: str = "", task_id: str = "", **kw):
     if action == "loaded" and skill_name:
         _recorder.skill_loaded(session_id or "", skill_name, task_id or None)
         if _sessions is not None and session_id:
             _sessions.add_skill(session_id, skill_name)
+        _snapshot_for(session_id or "_")
 
 
 def _on_post_tool_call(tool_name: str = "", args: Any = None, result: Any = None, session_id: str = "",
@@ -182,6 +203,7 @@ def _on_post_llm_call(session_id: str = "", turn_id: str = "", conversation_hist
     saved = []
     for ep in eps:
         ep.skill_version = _skill_version(ep.skill)
+        ep.workspace_snapshot = _snapshots.get(session_id or "_")
         try:
             _store.save(ep)
             saved.append((ep.skill, ep.id))

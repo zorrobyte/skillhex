@@ -59,3 +59,12 @@ def test_unknown_id_raises(tmp_path):
     hs = HypothesisStore(tmp_path / "h.json")
     with pytest.raises(KeyError):
         hs.refine("H9", "x")
+
+
+def test_drop_test_unlinks_from_all_hypotheses(tmp_path):
+    hs = HypothesisStore(tmp_path / "h.json")
+    hs.add("a"); hs.add("b")
+    hs.link_test("H1", "t_x"); hs.link_test("H2", "t_x")
+    res = hs.apply_ops([{"op": "drop_test", "test_id": "t_x", "reason": "asserts the wrong deliverable"}])
+    assert res["dropped_tests"] == ["t_x"]
+    assert hs.get("H1").tests == [] and hs.get("H2").tests == []

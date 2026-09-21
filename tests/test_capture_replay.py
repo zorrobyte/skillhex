@@ -68,6 +68,9 @@ def test_policy_decides_live_replay_or_block():
     assert kind == "block" and "not in cassette" in msg
     permissive = ReplayPolicy(Cassette(cassette_episode()), mode="permissive")
     assert permissive.decide("terminal", {"command": "rm -rf /"}) == ("live", None)
+    # permissive: local tools run live even when recorded (workspace is a copy); network tools are replayed
+    assert permissive.decide("terminal", {"command": "curl a"}) == ("live", None)
+    assert permissive.decide("web_fetch", {"url": "u"}) == ("replay", "W")
 
 
 def test_episode_ids_are_filesystem_safe():

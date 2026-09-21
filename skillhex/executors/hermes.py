@@ -20,6 +20,7 @@ from typing import Any, Dict, List, Optional
 from ..episodes import EpisodeStore
 from ..models import Episode
 from ..search import ExecResult, Task
+from ..workspace import restore_pristine
 
 try:
     import yaml
@@ -78,7 +79,7 @@ class HermesExecutor:
                  hermes_bin: Optional[str] = None, replay_episode_dir: Optional[Path] = None,
                  replay_mode: str = "permissive", max_turns: int = 30, run_budget: int = 600,
                  timeout: int = 900, model_override: Optional[Dict[str, Any]] = None,
-                 python: Optional[str] = None):
+                 python: Optional[str] = None, root_episode: Optional[Episode] = None):
         self.hermes_home = Path(hermes_home).expanduser()
         self.skill = skill
         self.runs_dir = Path(runs_dir)
@@ -90,6 +91,7 @@ class HermesExecutor:
         self.python = python or sys.executable
         self.source_skill_dir = find_skill_dir(skill, self.hermes_home)
         self.last_attempt_dir: Optional[Path] = None
+        self.root_episode = root_episode
 
     # ---- scratch profile -----------------------------------------------------------
     def _scratch_config(self) -> Dict[str, Any]:
@@ -140,9 +142,13 @@ class HermesExecutor:
         cfg = self._scratch_config()
         (home / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False) if yaml else json.dumps(cfg))
         workspace = attempt / "workspace"
-        if task.cwd and Path(task.cwd).is_dir() and _dir_size(Path(task.cwd)) <= MAX_WORKSPACE_BYTES:
-            shutil.copytree(task.cwd, workspace, symlinks=True,
-                            ignore=shutil.ignore_patterns(".git", "node_modules", ".venv", "__pycache__"))
+        snap = self.root_episode.workspace_snapshot if self.root_episode else None
+        source = snap if snap and Path(snap).is_dir() else task.cwd
+        if source and Path(source).is_dir() and _dir_size(Path(source)) <= MAX_WORKSPACE_BYTES:
+            shutil.copytree(source, workspace, symlinks=True,
+                            ignore=shutil.ignore_patterns(".git", "node_modules", ".venv", "__pycache__", ".skillhex*"))
+            if not snap and self.root_episode is not None:
+                restore_pristine(workspace, self.root_episode)
         else:
             workspace.mkdir(parents=True)
         (attempt / "capture").mkdir()

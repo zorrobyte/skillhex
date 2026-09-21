@@ -103,6 +103,12 @@ class HypothesisStore:
                 orphaned = self.refute(op["hypothesis_id"], op.get("reason", ""))
                 result["refuted"].append(op["hypothesis_id"])
                 result["orphaned_tests"].extend(orphaned)
+            elif kind == "drop_test" and op.get("test_id"):
+                for h in self.all():
+                    if op["test_id"] in h.tests:
+                        h.tests.remove(op["test_id"])
+                self._save()
+                result.setdefault("dropped_tests", []).append(op["test_id"])
         return result
 
     def summary(self) -> str:

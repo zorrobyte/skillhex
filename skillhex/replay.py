@@ -30,15 +30,23 @@ class Cassette:
         return q.pop(0)
 
 
+REPLAYABLE_TOOLS = {"web_search", "web_extract", "web_fetch", "browser_navigate", "vision_analyze"}
+
+
 class ReplayPolicy:
-    def __init__(self, cassette: Cassette, mode: str = "permissive"):
+    """permissive: serve recorded results for network tools only, everything else runs live in the
+    copied workspace. strict: additionally block non-read-only calls that are not in the cassette."""
+
+    def __init__(self, cassette: Cassette, mode: str = "permissive", replayable: Optional[set] = None):
         self.cassette = cassette
         self.mode = mode
+        self.replayable = replayable if replayable is not None else set(REPLAYABLE_TOOLS)
 
     def decide(self, name: str, args: Dict[str, Any]) -> Tuple[str, Optional[str]]:
-        hit = self.cassette.lookup(name, args)
-        if hit is not None:
-            return "replay", hit
+        if name in self.replayable or self.mode == "strict":
+            hit = self.cassette.lookup(name, args)
+            if hit is not None:
+                return "replay", hit
         if name in READ_ONLY_TOOLS or self.mode == "permissive":
             return "live", None
         return "block", f"[skillhex replay] call not in cassette: {name} {json.dumps(args, default=str)[:200]}"

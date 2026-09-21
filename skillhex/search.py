@@ -20,7 +20,7 @@ from .evidence import EvidenceMatrix
 from .hypotheses import HypothesisStore, Hypothesis
 from .lint import lint_skill
 from .models import Episode
-from .scoring import score_row
+from .scoring import score_node
 from .tree import PatchTree, Node
 
 log = logging.getLogger("skillhex.search")
@@ -164,7 +164,7 @@ class SkillSearch:
 
     def _rescore(self, node: Node, reward: Optional[int] = None) -> None:
         r = node.reward if reward is None else reward
-        s = score_row(self.matrix.row(node.id), self.bank.list(), reward=r)
+        s = score_node(node.id, self.matrix, self.bank.list(), reward=r, root=self.tree.root_id or "v0")
         self.tree.evaluate(node.id, score=s, reward=r or 0, episode_id=node.episode_id)
 
     def _rescore_all(self) -> None:
@@ -224,7 +224,8 @@ class SkillSearch:
             must_emit = l == self.cfg.L
             res = self.reflector.reflect(self._ctx(node, l), must_emit)
             ops = self.hypotheses.apply_ops(res.hypothesis_ops)
-            self._prune_refuted(ops["orphaned_tests"])
+            dropped = [o.get("test_id") for o in res.hypothesis_ops if o.get("op") == "drop_test" and o.get("test_id")]
+            self._prune_refuted(ops["orphaned_tests"] + [t for t in dropped if any(c.id == t for c in self.bank.list())])
             if res.patch_candidates:
                 candidates = res.patch_candidates
                 break

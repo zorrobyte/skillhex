@@ -42,6 +42,7 @@ class Episode:
     turn_id: Optional[str] = None
     model: Optional[str] = None
     cwd: Optional[str] = None
+    workspace_snapshot: Optional[str] = None
     created_at: float = field(default_factory=time.time)
 
     def to_dict(self) -> Dict[str, Any]:

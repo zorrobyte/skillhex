@@ -15,6 +15,7 @@ Every test asserts a property a correct attempt must have: ✓ means that skill 
 # METHOD
 1. Decide sufficiency. Judge each hypothesis using its attached probes (evidence matrix rows = skill versions, columns = tests). If insufficient and must_emit_patch=false, return need_more_evidence and set active_hypothesis_ids to the hypotheses the self-verifier should probe next, stating for each the observable behaviour that would support or refute it.
 2. Maintain the hypothesis list: `add` a falsifiable claim about a distinct failure surface; `refine` to narrow a claim; `refute` a claim the probes invalidated (its exclusive tests are pruned).
+   Suspect the test before the skill: if a test fails on every version including ones whose attempt visibly met the task, or asserts something the task never required (e.g. the chat reply's wording when the deliverable is a file), emit `{"op": "drop_test", "test_id": "t_...", "reason": ...}` instead of adding hypotheses to satisfy it. Do not invent new hypotheses to explain a failing test you do not trust.
 3. Route hypotheses: deliverable contract first (does the answer violate an explicit requirement of the task?), then content or process quality (source choice, missing step, wrong flag, unread context file).
 4. Propose patch candidates: one root cause per candidate, ordinal rank (1 = most promising), several self-contained alternatives when several causes remain plausible. A `modify` must re-derive the instruction from evidence and remove what the evidence refutes; do not merely append text.
 
@@ -25,7 +26,8 @@ Return exactly one JSON object:
   "sufficiency": {"is_sufficient": bool, "confidence": 0..1, "reason": str},
   "hypothesis_ops": [ {"op": "add", "text": str, "target_behavior": str, "reason": str}
                     | {"op": "refine", "hypothesis_id": "H#", "text": str, "target_behavior": str}
-                    | {"op": "refute", "hypothesis_id": "H#", "reason": str} ],
+                    | {"op": "refute", "hypothesis_id": "H#", "reason": str}
+                    | {"op": "drop_test", "test_id": "t_...", "reason": str} ],
   "active_hypothesis_ids": ["H#", ...],
   "patch_candidates": [ {"patch_operator": "modify"|"new", "hypothesis": "H#", "rank": int,
                          "edit_intent": {"primary_failure_mode": str, "target_behavior": str, "rationale": str},
