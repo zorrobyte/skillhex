@@ -152,11 +152,13 @@ def evolve_skill(home: Path, hermes_home: Path, skill: str, *, episode: Optional
     store = EpisodeStore(home / "episodes")
     if episode is None and checker:
         _grade_pending_with_checker(store, skill, checker)
+    consumed: list = [episode.id] if episode is not None else []
     if episode is None:
-        failed = store.list(skill, outcome="fail")
+        failed = store.list(skill, outcome="fail", unevolved=True)
         if not failed and task_prompt is None:
             return {"skill": skill, "status": "nothing_to_do"}
         episode = failed[-1] if failed else None
+        consumed = [e.id for e in failed]
     skill_dir = find_skill_dir(skill, hermes_home)
     if skill_dir is None:
         return {"skill": skill, "status": "skill_not_found"}
@@ -203,11 +205,10 @@ def evolve_skill(home: Path, hermes_home: Path, skill: str, *, episode: Optional
     report = _report(run_dir, skill, task, result, search, decision + (f"; {applied}" if applied else ""), llm)
     summary = {"skill": skill, "status": "done", "passed": result.passed, "decision": decision, "applied": applied,
                "best": best.id if best else None, "best_score": best.score if best else None, "root_score": root.score,
-               "executor_calls": result.executor_calls, "report": str(report), "llm_usage": llm.usage}
+               "executor_calls": result.executor_calls, "report": str(report), "run": str(run_dir), "llm_usage": llm.usage}
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=2))
-    if episode is not None:
-        marker = home / "runs" / f"{skill}.evolved.json"
-        marker.write_text(json.dumps({"episode": episode.id, "run": str(run_dir), "at": time.time()}))
+    # every failure this run could have learned from is consumed; a later failure schedules a new run
+    store.mark_evolved(skill, consumed, run=str(run_dir))
     return summary
 
 
@@ -263,8 +264,7 @@ def main(argv=None) -> int:
     lock = home / "evolve.lock"
     try:
         store = EpisodeStore(home / "episodes")
-        skills = [a.skill] if a.skill else [s for s in store.skills() if store.list(s, outcome="fail")
-                                            and not (home / "runs" / f"{s}.evolved.json").exists()]
+        skills = [a.skill] if a.skill else store.pending_skills()
         for s in skills:
             res = evolve_skill(home, hh, s, task_prompt=a.task_prompt, checker=a.checker, cwd=a.cwd, budget=a.budget,
                                min_score=a.min_score, replay_mode=a.replay_mode, apply=not a.no_apply)

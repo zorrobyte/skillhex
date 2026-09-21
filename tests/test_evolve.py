@@ -34,7 +34,23 @@ def test_official_pass_applies_patch_and_writes_report(tmp_path):
     assert (hh / "skills" / "weather" / "SKILL.md.skillhex-prev").read_text() == FM + "skill: use wttr"
     report = Path(res["report"]).read_text()
     assert "Evidence matrix" in report and "Patch tree" in report
-    assert (home / "runs" / "weather.evolved.json").exists()
+    # the failed episode is now marked evolved, so it does not schedule a second run
+    assert EpisodeStore(home / "episodes").load("weather", "ep0").evolved_run == res["run"]
+    assert EpisodeStore(home / "episodes").pending_skills() == []
+
+
+def test_a_new_failure_after_a_run_is_pending_again(tmp_path):
+    home, hh = setup_home(tmp_path)
+    store = EpisodeStore(home / "episodes")
+    evolve_skill(home, hh, "weather", budget=2, llm=NoLLM(), executor=FakeExecutor(),
+                 reflector=ScriptedReflector(), verifier=ScriptedVerifier())
+    assert store.pending_skills() == []
+    ep = Episode(id="ep1", skill="weather", skill_version="y", task_id="t",
+                 messages=[{"role": "user", "content": "forecast for Oslo"}, {"role": "assistant", "content": "?"}],
+                 outcome="fail", outcome_source="followup")
+    store.save(ep)
+    assert store.pending_skills() == ["weather"]
+    assert [e.id for e in store.list("weather", outcome="fail", unevolved=True)] == ["ep1"]
 
 
 def test_no_pass_and_low_score_keeps_original(tmp_path):

@@ -43,6 +43,7 @@ class Episode:
     model: Optional[str] = None
     cwd: Optional[str] = None
     workspace_snapshot: Optional[str] = None
+    evolved_run: Optional[str] = None   # set once an evolution run has consumed this failure
     created_at: float = field(default_factory=time.time)
 
     def to_dict(self) -> Dict[str, Any]:

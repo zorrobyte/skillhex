@@ -245,8 +245,7 @@ def _maybe_schedule_evolution(skills: Optional[list]) -> None:
     if not _cfg("auto_evolve", True) or os.environ.get("SKILLHEX_CAPTURE_DIR"):
         return  # never recurse from inside an evaluation attempt
     try:
-        pending = [s for s in (skills or _store.skills()) if _store.list(s, outcome="fail")
-                   and not (_home / "runs" / f"{s}.evolved.json").exists()]
+        pending = [s for s in (skills or _store.skills()) if _store.list(s, outcome="fail", unevolved=True)]
     except Exception:  # noqa: BLE001
         return
     if not pending:

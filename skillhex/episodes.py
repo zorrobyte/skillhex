@@ -57,7 +57,7 @@ class EpisodeStore:
         self.save(ep)
         return ep
 
-    def list(self, skill: str, outcome: Optional[str] = None) -> List[Episode]:
+    def list(self, skill: str, outcome: Optional[str] = None, unevolved: bool = False) -> List[Episode]:
         base = self.root / skill
         if not base.is_dir():
             return []
@@ -65,9 +65,20 @@ class EpisodeStore:
         for d in base.iterdir():
             if (d / EPISODE_FILE).exists():
                 ep = self.load(skill, d.name)
-                if outcome is None or ep.outcome == outcome:
+                if (outcome is None or ep.outcome == outcome) and not (unevolved and ep.evolved_run):
                     eps.append(ep)
         return sorted(eps, key=lambda e: (e.created_at, e.id))
+
+    def pending_skills(self) -> List[str]:
+        """Skills with at least one failed episode no evolution run has consumed yet."""
+        return [s for s in self.skills() if self.list(s, outcome="fail", unevolved=True)]
+
+    def mark_evolved(self, skill: str, episode_ids: List[str], run: str) -> None:
+        for eid in episode_ids:
+            if self.exists(skill, eid):
+                ep = self.load(skill, eid)
+                ep.evolved_run = run
+                self.save(ep)
 
     def skills(self) -> List[str]:
         if not self.root.is_dir():
