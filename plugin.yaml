@@ -28,3 +28,19 @@ config_schema:
     type: float
     default: 0.8
     description: "Without a checker, a candidate must reach this evidence score (and beat the original) before it is applied."
+  budget:
+    type: int
+    default: 5
+    description: "Evaluation attempts per evolution run (the paper's K). Each attempt is one fresh-profile run of the task."
+  auto_rollback:
+    type: bool
+    default: true
+    description: "Roll a patched skill back to its previous version when a banked hard test fails on reuse and the user then says the answer was wrong."
+  bank_min_similarity:
+    type: float
+    default: 0.5
+    description: "How similar a new task prompt must be (0..1) to a task the skill's regression tests were written for, before those tests re-run."
+  snapshot_max_bytes:
+    type: int
+    default: 52428800
+    description: "Skip the working-directory snapshot (taken when a skill loads, so evaluation starts from the pre-attempt state) above this size."

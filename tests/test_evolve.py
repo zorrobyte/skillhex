@@ -122,3 +122,21 @@ def test_checker_grades_pending_episode_before_search(tmp_path):
     assert store.load("weather", "ep0").outcome == "fail"
     assert store.load("weather", "ep0").outcome_source == "checker"
     assert res["decision"].startswith("apply")
+
+
+def test_write_approval_on_stages_the_patch_instead_of_writing_it(tmp_path):
+    """When the user gated skill writes (skills.write_approval: true) the winner goes to
+    <HERMES_HOME>/pending/skills/<id>.json in Hermes's own record shape, for /skills pending|diff|approve."""
+    home, hh = setup_home(tmp_path)
+    (hh / "config.yaml").write_text("skills:\n  write_approval: true\n")
+    res = evolve_skill(home, hh, "weather", budget=5, llm=NoLLM(), executor=FakeExecutor(),
+                       reflector=ScriptedReflector(), verifier=ScriptedVerifier())
+    assert res["decision"].startswith("apply")
+    assert (hh / "skills" / "weather" / "SKILL.md").read_text() == FM + "skill: use wttr", "must not write directly"
+    pending = list((hh / "pending" / "skills").glob("*.json"))
+    assert len(pending) == 1
+    rec = json.loads(pending[0].read_text())
+    assert rec["subsystem"] == "skills" and rec["origin"] == "background_review"
+    assert rec["payload"]["action"] == "edit" and rec["payload"]["name"] == "weather"
+    assert "open-meteo" in rec["payload"]["content"]
+    assert rec["id"] in res["applied"] and "staged" in res["applied"]

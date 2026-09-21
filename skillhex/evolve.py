@@ -134,8 +134,45 @@ def resolve_executor_model(hermes_home: Path) -> Optional[Dict[str, Any]]:
     return over
 
 
+_TRUTHY = {"on", "true", "yes", "1", "approve", "enabled"}
+
+
+def write_approval_enabled(hermes_home: Path) -> bool:
+    """skills.write_approval from config.yaml, coerced the way tools/write_approval.py does."""
+    v = (_load_config(hermes_home).get("skills") or {}).get("write_approval", False)
+    return v is True or (isinstance(v, str) and v.strip().lower() in _TRUTHY)
+
+
+def _stage_skill(hermes_home: Path, skill: str, content: str, evidence: Dict[str, Any]) -> str:
+    """Stage the winner as a pending skill write in Hermes's own record shape
+    (<HERMES_HOME>/pending/skills/<id>.json), so /skills pending | diff <id> | approve <id> handle it."""
+    import uuid
+    pid = uuid.uuid4().hex[:8]
+    desc = ""
+    for line in content.splitlines():
+        if line.startswith("description:"):
+            desc = line.split(":", 1)[1].strip().strip("'\"")[:140]
+            break
+    score = evidence.get("score")
+    gist = (f"skillhex: rewrite '{skill}'" + (f" — {desc}" if desc else "")
+            + f" (evidence {score:.2f}" if isinstance(score, (int, float)) else f"skillhex: rewrite '{skill}' (")
+    gist += ", official pass)" if evidence.get("official") == 1 else ")"
+    record = {"id": pid, "subsystem": "skills", "action": "edit", "summary": gist, "origin": "background_review",
+              "created_at": time.time(), "payload": {"action": "edit", "name": skill, "content": content},
+              "skillhex": evidence}
+    p = hermes_home / "pending" / "skills" / f"{pid}.json"
+    p.parent.mkdir(parents=True, exist_ok=True)
+    tmp = p.with_suffix(".json.tmp")
+    tmp.write_text(json.dumps(record, indent=2))
+    os.replace(tmp, p)
+    return f"staged for approval (skills.write_approval is on): pending id {pid} -> /skills diff {pid} | /skills approve {pid}"
+
+
 def _apply_skill(hermes_home: Path, skill: str, content: str, evidence: Dict[str, Any]) -> str:
-    """Write the winning SKILL.md into the profile, through the Hermes ledger when importable."""
+    """Write the winning SKILL.md into the profile, through the Hermes ledger when importable.
+    If the user gated skill writes, stage it for their approval instead."""
+    if write_approval_enabled(hermes_home):
+        return _stage_skill(hermes_home, skill, content, evidence)
     src = find_skill_dir(skill, hermes_home)
     profile_dir = hermes_home / "skills" / skill
     if src is None or not str(src.resolve()).startswith(str(hermes_home.resolve())):

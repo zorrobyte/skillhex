@@ -49,7 +49,7 @@ class FakeCtx:
 def load_plugin(tmp_path, config=None, llm=None):
     """Fresh module instance per test: HERMES_HOME under tmp_path, auto_evolve off unless asked."""
     hh = tmp_path / "hermes"
-    hh.mkdir(exist_ok=True)
+    hh.mkdir(parents=True, exist_ok=True)
     os.environ["HERMES_HOME"] = str(hh)
     os.environ.pop("SKILLHEX_CAPTURE_DIR", None)
     os.environ.pop("SKILLHEX_REPLAY", None)

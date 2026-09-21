@@ -107,6 +107,10 @@ def _write_pending_state() -> None:
         log.debug("skillhex: status write failed", exc_info=True)
 
 
+def _bank_for(skill: str) -> SkillBank:
+    return SkillBank(_home / "banks", skill, min_similarity=float(_cfg("bank_min_similarity", 0.5)))
+
+
 _snapshots: Dict[str, Optional[str]] = {}
 
 
@@ -117,7 +121,8 @@ def _snapshot_for(session_id: str) -> Optional[str]:
         return _snapshots[session_id]
     dest = None
     try:
-        d = snapshot_workspace(os.getcwd(), _home / "snapshots" / re.sub(r"[^A-Za-z0-9_.-]+", "-", session_id)[:80])
+        d = snapshot_workspace(os.getcwd(), _home / "snapshots" / re.sub(r"[^A-Za-z0-9_.-]+", "-", session_id)[:80],
+                               max_bytes=int(_cfg("snapshot_max_bytes", 50 * 1024 * 1024)))
         dest = str(d) if d else None
     except Exception:  # noqa: BLE001
         log.debug("skillhex: snapshot failed", exc_info=True)
@@ -196,7 +201,7 @@ def _on_pre_llm_call(session_id: str = "", user_message: Any = None, is_first_tu
 
 def _on_fail(last: Dict[str, Any], note: str) -> None:
     """A confirmed failure: roll back a patch the bank already flagged, then schedule evolution for the rest."""
-    for skill in last.get("regressed", []):
+    for skill in (last.get("regressed", []) if _cfg("auto_rollback", True) else []):
         if rollback_skill(_hermes_home, skill):
             log.warning("skillhex: rolled back %s (bank regression + user fail)", skill)
             with open(_home / "rollbacks.jsonl", "a") as f:
@@ -226,7 +231,7 @@ def _on_post_llm_call(session_id: str = "", turn_id: str = "", conversation_hist
     regressed = []
     for ep in eps:
         try:
-            rec = SkillBank(_home / "banks", ep.skill).regress(ep, _store.dir(ep.skill, ep.id))
+            rec = _bank_for(ep.skill).regress(ep, _store.dir(ep.skill, ep.id))
             if rec and rec["hard_failures"]:
                 regressed.append(ep.skill)
                 log.warning("skillhex: regression on %s: hard failures %s", ep.skill, rec["hard_failures"])
@@ -262,7 +267,8 @@ def _maybe_schedule_evolution(skills: Optional[list]) -> None:
         return
     lock.write_text(str(os.getpid()))
     cmd = [sys.executable, "-m", "skillhex.evolve", "--home", str(_home), "--hermes-home", str(_hermes_home), "--auto",
-           "--min-score", str(_cfg("min_score_to_apply", 0.8)), "--replay-mode", str(_cfg("replay_mode", "permissive"))]
+           "--min-score", str(_cfg("min_score_to_apply", 0.8)), "--replay-mode", str(_cfg("replay_mode", "permissive")),
+           "--budget", str(int(_cfg("budget", 5)))]
     logf = open(_home / "evolve.log", "a")
     try:
         subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT, start_new_session=True, cwd=str(_home))

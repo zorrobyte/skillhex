@@ -40,3 +40,52 @@ def test_plugin_registers_reviewer_and_executor_as_hermes_auxiliary_tasks(tmp_pa
     mod, ctx, hh = load_plugin(tmp_path)
     assert set(ctx.aux_tasks) == {"skillhex_reflector", "skillhex_executor"}
     assert "review" in ctx.aux_tasks["skillhex_reflector"]["description"].lower()
+
+
+def _failed_episode(mod, skill="notes"):
+    from skillhex.models import Episode
+    ep = Episode(id="e1", skill=skill, skill_version="v", task_id="t", outcome="fail", outcome_source="user",
+                 messages=[{"role": "user", "content": "count notes"}])
+    mod._store.save(ep)
+
+
+def test_budget_setting_is_passed_to_the_background_run(tmp_path, monkeypatch):
+    mod, ctx, hh = load_plugin(tmp_path, config={"auto_evolve": True, "budget": 3})
+    _failed_episode(mod)
+    seen = {}
+
+    class P:
+        def __init__(self, cmd, **kw):
+            seen["cmd"] = cmd
+    monkeypatch.setattr(mod.subprocess, "Popen", P)
+    mod._maybe_schedule_evolution(["notes"])
+    assert "--budget" in seen["cmd"] and seen["cmd"][seen["cmd"].index("--budget") + 1] == "3"
+
+
+def _skill_with_backup(hh, name="notes"):
+    d = hh / "skills" / name
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("---\nname: notes\n---\npatched")
+    (d / "SKILL.md.skillhex-prev").write_text("---\nname: notes\n---\noriginal")
+    return d
+
+
+def test_auto_rollback_can_be_disabled(tmp_path):
+    mod, ctx, hh = load_plugin(tmp_path, config={"auto_rollback": False})
+    d = _skill_with_backup(hh)
+    mod._on_fail({"episodes": [["notes", "e1"]], "regressed": ["notes"]}, "wrong")
+    assert (d / "SKILL.md").read_text().endswith("patched")
+    mod2, ctx2, hh2 = load_plugin(tmp_path / "b")
+    d2 = _skill_with_backup(hh2)
+    mod2._on_fail({"episodes": [["notes", "e1"]], "regressed": ["notes"]}, "wrong")
+    assert (d2 / "SKILL.md").read_text().endswith("original")
+
+
+def test_bank_similarity_and_snapshot_limit_settings(tmp_path, monkeypatch):
+    mod, ctx, hh = load_plugin(tmp_path, config={"bank_min_similarity": 0.9, "snapshot_max_bytes": 1})
+    assert mod._bank_for("notes").min_similarity == 0.9
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "big.txt").write_text("more than one byte")
+    monkeypatch.chdir(ws)
+    assert mod._snapshot_for("sid") is None
