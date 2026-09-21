@@ -5,4 +5,4 @@ if not os.path.exists(p):
     print("answer.txt missing"); sys.exit(1)
 v = open(p).read().strip()
 print(f"answer.txt = {v!r}")
-sys.exit(0 if v == "4" else 1)
+sys.exit(0 if v == os.environ.get("SKILLHEX_EXPECTED", "4") else 1)

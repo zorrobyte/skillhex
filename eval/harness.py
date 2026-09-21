@@ -38,6 +38,8 @@ class Fixture:
     workspace: Path
     expected: str
     skill_md: Path
+    heldout_workspace: Optional[Path] = None
+    heldout_expected: str = ""
 
 
 def load_fixtures(root: Path) -> List[Fixture]:
@@ -49,8 +51,11 @@ def load_fixtures(root: Path) -> List[Fixture]:
         t = json.loads(task.read_text())
         skill_md = d / "skill" / "SKILL.md"
         name = skill_md.read_text().split("name:", 1)[1].splitlines()[0].strip()
+        ho = t.get("heldout") or {}
         out.append(Fixture(name=d.name, dir=d, skill=name, prompt=t["prompt"], checker=(d / t.get("checker", "checker.py")).resolve(),
-                           workspace=(d / "workspace").resolve(), expected=str(t.get("expected", "")), skill_md=skill_md))
+                           workspace=(d / "workspace").resolve(), expected=str(t.get("expected", "")), skill_md=skill_md,
+                           heldout_workspace=(d / ho["workspace"]).resolve() if ho.get("workspace") else None,
+                           heldout_expected=str(ho.get("expected", ""))))
     return out
 
 
@@ -59,6 +64,18 @@ def no_skill_content(skill: str, original: str) -> str:
     fm = original.split("---", 2)
     head = fm[1] if len(fm) >= 3 else f"\nname: {skill}\ndescription: {skill}\n"
     return f"---{head}---\n\n# {skill}\n\nNo procedure is provided. Use your own judgement and the tools available.\n"
+
+
+def main_task(f: Fixture) -> Task:
+    return Task(id=f"{f.name}-eval", skill=f.skill, prompt=f.prompt, cwd=str(f.workspace),
+                meta={"checker": str(f.checker), "expected": f.expected})
+
+
+def heldout_task(f: Fixture) -> Task:
+    """Same task text and skill, different data: measures whether the evolved skill generalises beyond the
+    exact example it was repaired on."""
+    return Task(id=f"{f.name}-heldout", skill=f.skill, prompt=f.prompt, cwd=str(f.heldout_workspace),
+                meta={"checker": str(f.checker), "expected": f.heldout_expected})
 
 
 def measure(executor, task: Task, content: str, n: int, label: str) -> Dict[str, Any]:
@@ -74,18 +91,25 @@ def _pct(x: float) -> str:
 
 
 def render_table(rows: List[Dict[str, Any]]) -> str:
-    lines = ["| fixture | before (poisoned) | no skill | after | evolve decision | attempts | reviewer tokens |",
-             "|---|---|---|---|---|---|---|"]
+    heldout = any(r.get("after_heldout") for r in rows)
+    head = "| fixture | before (poisoned) | no skill | after |" + (" before held-out | after held-out |" if heldout else "") + " evolve decision | attempts | reviewer tokens |"
+    lines = [head, "|---" * head.count("|") + "|"]
+    lines[1] = "|" + "---|" * (head.count("|") - 1)
+
+    def cell(m):
+        return f"{m.get('passes', round(m.get('rate', 0) * m.get('n', 0)))}/{m.get('n', 0)}" if m else "—"
     for r in rows:
         b, ns, a, ev = r["before"], r.get("no_skill") or {}, r["after"], r.get("evolve") or {}
-        def cell(m):
-            return f"{m.get('passes', round(m.get('rate', 0) * m.get('n', 0)))}/{m.get('n', 0)}" if m else "—"
-        lines.append(f"| {r['fixture']} | {cell(b)} | {cell(ns)} | {cell(a)} | {ev.get('decision', '—')} | "
+        extra = f" {cell(r.get('before_heldout'))} | {cell(r.get('after_heldout'))} |" if heldout else ""
+        lines.append(f"| {r['fixture']} | {cell(b)} | {cell(ns)} | {cell(a)} |{extra} {ev.get('decision', '—')} | "
                      f"{ev.get('executor_calls', '—')} | {ev.get('reviewer_tokens', '—')} |")
     if rows:
         mean = lambda k: sum((r.get(k) or {}).get("rate", 0) for r in rows) / len(rows)  # noqa: E731
         lines.append("")
-        lines.append(f"mean pass rate: before {_pct(mean('before'))}, no skill {_pct(mean('no_skill'))}, after {_pct(mean('after'))}")
+        s = f"mean pass rate: before {_pct(mean('before'))}, no skill {_pct(mean('no_skill'))}, after {_pct(mean('after'))}"
+        if heldout:
+            s += f"; held-out before {_pct(mean('before_heldout'))}, after {_pct(mean('after_heldout'))}"
+        lines.append(s)
     return "\n".join(lines)
 
 
@@ -119,7 +143,7 @@ def make_home(base_profile: Path, dest: Path, fixture: Fixture) -> Path:
 
 
 def run_fixture(fixture: Fixture, base_profile: Path, out_root: Path, n: int = 2, budget: int = 5,
-                conditions=("before", "no_skill", "evolve", "after"), log=print) -> Dict[str, Any]:
+                conditions=("before", "no_skill", "evolve", "after"), log=print, evolve_checker: bool = True) -> Dict[str, Any]:
     from skillhex.evolve import evolve_skill, resolve_executor_model
     from skillhex.executors.hermes import HermesExecutor
 
@@ -127,8 +151,7 @@ def run_fixture(fixture: Fixture, base_profile: Path, out_root: Path, n: int = 2
     hh = make_home(base_profile, out_root / "homes" / fixture.name, fixture)
     home = out_root / "skillhex" / fixture.name
     home.mkdir(parents=True, exist_ok=True)
-    task = Task(id=f"{fixture.name}-eval", skill=fixture.skill, prompt=fixture.prompt, cwd=str(fixture.workspace),
-                meta={"checker": str(fixture.checker)})
+    task = main_task(fixture)
     poisoned = fixture.skill_md.read_text()
     row: Dict[str, Any] = {"fixture": fixture.name, "skill": fixture.skill, "started": time.time()}
 
@@ -142,8 +165,14 @@ def run_fixture(fixture: Fixture, base_profile: Path, out_root: Path, n: int = 2
     if "no_skill" in conditions:
         row["no_skill"] = measure(executor("no_skill"), task, no_skill_content(fixture.skill, poisoned), n, "no_skill")
         log(f"[{fixture.name}] no_skill: {row['no_skill']['passes']}/{n}")
+    if "before_heldout" in conditions and fixture.heldout_workspace:
+        row["before_heldout"] = measure(executor("before_heldout"), heldout_task(fixture), poisoned, n, "before_heldout")
+        log(f"[{fixture.name}] before_heldout: {row['before_heldout']['passes']}/{n}")
     if "evolve" in conditions:
-        res = evolve_skill(home, hh, fixture.skill, task_prompt=fixture.prompt, checker=str(fixture.checker),
+        # evolve_checker=False is how the plugin runs from a session: no official checker, the evidence
+        # gate alone decides. The checker then only grades the after/heldout conditions.
+        res = evolve_skill(home, hh, fixture.skill, task_prompt=fixture.prompt,
+                           checker=str(fixture.checker) if evolve_checker else None,
                            cwd=str(fixture.workspace), budget=budget)
         usage = res.get("llm_usage") or {}
         row["evolve"] = {"decision": res.get("decision"), "executor_calls": res.get("executor_calls"),
@@ -155,5 +184,9 @@ def run_fixture(fixture: Fixture, base_profile: Path, out_root: Path, n: int = 2
         row["after"] = measure(executor("after"), task, current, n, "after")
         row["after"]["skill_changed"] = current != poisoned
         log(f"[{fixture.name}] after: {row['after']['passes']}/{n} (skill changed: {current != poisoned})")
+    if "after_heldout" in conditions and fixture.heldout_workspace:
+        current = (hh / "skills" / fixture.skill / "SKILL.md").read_text()
+        row["after_heldout"] = measure(executor("after_heldout"), heldout_task(fixture), current, n, "after_heldout")
+        log(f"[{fixture.name}] after_heldout: {row['after_heldout']['passes']}/{n}")
     row["seconds"] = round(time.time() - row["started"], 1)
     return row

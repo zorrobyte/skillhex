@@ -1,0 +1,9 @@
+# exported 2026-09-21 from sales-db; do not edit
+order_id,customer,region,amount,currency
+2001,hooli,EU,50.00,EUR
+2002,pied-piper,US,999.00,USD
+2003,hooli,APAC,12.00,USD
+2004,vandelay,EU,25.50,EUR
+2005,vandelay,EU,100.00,EUR
+2006,pied-piper,US,1.00,USD
+TOTAL,,,1187.50,

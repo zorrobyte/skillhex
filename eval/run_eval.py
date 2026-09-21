@@ -24,7 +24,9 @@ def main(argv=None) -> int:
     ap.add_argument("--n", type=int, default=2)
     ap.add_argument("--budget", type=int, default=5)
     ap.add_argument("--fixtures", nargs="*", default=None)
-    ap.add_argument("--conditions", nargs="*", default=["before", "no_skill", "evolve", "after"])
+    ap.add_argument("--conditions", nargs="*", default=["before", "no_skill", "before_heldout", "evolve", "after", "after_heldout"])
+    ap.add_argument("--evolve-without-checker", action="store_true",
+                    help="the evolution step gets no checker (evidence gate only), as in a live session; the checker grades after/held-out")
     a = ap.parse_args(argv)
     base = Path(os.environ.get("HERMES_HOME") or "~/.hermes").expanduser()
     out = Path(a.out)
@@ -39,13 +41,15 @@ def main(argv=None) -> int:
     for fx in fixtures:
         log(f"=== {fx.name} ===")
         try:
-            row = run_fixture(fx, base, out, n=a.n, budget=a.budget, conditions=tuple(a.conditions), log=log)
+            row = run_fixture(fx, base, out, n=a.n, budget=a.budget, conditions=tuple(a.conditions), log=log,
+                              evolve_checker=not a.evolve_without_checker)
         except Exception as e:  # noqa: BLE001
             log(f"[{fx.name}] FAILED: {e!r}")
             row = {"fixture": fx.name, "error": repr(e), "before": {}, "after": {}}
         rows.append(row)
         (out / "results.json").write_text(json.dumps(rows, indent=2))
         meta = (f"# skillhex before/after\n\nbase profile: {base}  ·  n={a.n} attempts per condition  ·  budget K={a.budget}  ·  "
+                f"evolve checker: {'no (evidence gate only)' if a.evolve_without_checker else 'yes'}  ·  "
                 f"{time.strftime('%Y-%m-%d %H:%M')}  ·  elapsed {round(time.time() - started)}s\n\n")
         (out / "RESULTS.md").write_text(meta + render_table([r for r in rows if r.get("before") is not None]) + "\n")
     log("done")

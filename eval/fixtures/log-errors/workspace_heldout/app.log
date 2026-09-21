@@ -1,0 +1,10 @@
+2026-09-21T08:00:00Z INFO  api        server started on :8080
+2026-09-21T08:00:03Z ERROR cache      redis unreachable
+2026-09-21T08:00:10Z INFO  cache      ERROR rate is nominal
+2026-09-21T08:01:00Z ERROR healthcheck upstream returned 503
+2026-09-21T08:01:30Z WARN  api        slow request 3.4s
+2026-09-21T08:02:00Z ERROR api        unhandled exception in /login
+2026-09-21T08:02:30Z ERROR healthcheck upstream returned 504
+2026-09-21T08:03:00Z INFO  worker     job 7 done
+2026-09-21T08:04:00Z ERROR worker     job 8 failed: timeout
+2026-09-21T08:05:00Z INFO  healthcheck ok

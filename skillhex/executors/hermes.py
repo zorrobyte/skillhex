@@ -233,6 +233,8 @@ class HermesExecutor:
             tmp_dir.mkdir(exist_ok=True)
             (tmp_dir / "episode.json").write_text(json.dumps(ep.to_dict()))
         env = dict(os.environ, SKILLHEX_EPISODE=str(tmp_dir), SKILLHEX_WORKSPACE=str(workspace))
+        if task.meta.get("expected") is not None:
+            env["SKILLHEX_EXPECTED"] = str(task.meta["expected"])
         try:
             proc = subprocess.run([self.python, str(checker)], capture_output=True, text=True, timeout=120, env=env, cwd=str(workspace))
         except subprocess.TimeoutExpired:
