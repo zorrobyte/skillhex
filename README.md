@@ -13,6 +13,25 @@ agent misread a weather API, got a wrong forecast, and the self-learning pass wr
 that bakes the misreading in. Every later weather question loads that skill first and repeats the
 mistake. Nobody is told, and nothing catches it.
 
+```mermaid
+flowchart LR
+  subgraph today["Hermes / OpenClaw today"]
+    direction TB
+    A1["A run goes wrong"] --> B1["The same model reviews its own transcript"]
+    B1 --> C1["Writes or edits SKILL.md. No test, no check that the task succeeded"]
+    C1 --> D1["Every later run loads it first and repeats the mistake"]
+  end
+  subgraph sx["With skillhex"]
+    direction TB
+    A2["A run goes wrong"] --> B2["Verdict comes from you or a checker, never from the model"]
+    B2 --> C2["Reviewer writes testable claims about the failure"]
+    C2 --> D2["Rewrites are tried in throwaway profiles and scored against the tests"]
+    D2 --> E2{"Passes the checker, or beats the original with no regressions?"}
+    E2 -- yes --> F2["Applied through the ledger, backed up, agent tells you"]
+    E2 -- no --> G2["Skill left alone"]
+  end
+```
+
 ## What skillhex does instead
 
 It treats a skill like code: a change has to pass tests before it ships, and you can always revert.
@@ -39,6 +58,26 @@ Walkthrough, using a notes skill that wrongly says archived notes are included i
    "Undo that" restores the old version. The tests stay with the skill and re-run the next time
    it is used on a similar task; if they fail again and you say the answer was wrong, the change
    is rolled back by itself.
+
+```mermaid
+sequenceDiagram
+  participant You
+  participant Agent as Hermes agent
+  participant Plugin as skillhex (in the session)
+  participant BG as skillhex (background process)
+  You->>Agent: how many notes do I have, including archived?
+  Agent->>Agent: loads the notes skill, runs notes.py list, answers 5
+  Plugin-->>Plugin: records prompt, tool calls, answer, and a copy of the workspace
+  You->>Agent: no, that's wrong, it's 7
+  Plugin-->>Plugin: reads your reply as the verdict: fail
+  Plugin->>BG: start an investigation
+  BG->>BG: claims, tests, rewrites, attempts in throwaway profiles
+  BG->>BG: gate: apply the winner or keep the original
+  Note over You,Agent: next session
+  Agent->>You: I updated the notes skill last night. It now passes --include-archived.
+  You->>Agent: undo that
+  Agent->>Plugin: skillhex undo notes-cli
+```
 
 You never get a prompt. If you have turned on Hermes's approval gate for skill writes
 (`skills.write_approval: true`), skillhex stages its change for `/skills approve` instead of
@@ -156,6 +195,28 @@ This is an implementation of [SkillHEX (Feng et al., 2026)](https://arxiv.org/ab
   (Appendix E, Algorithm 1), so a wrong first diagnosis cannot consume the budget;
 - each attempt runs in a fresh, isolated Hermes profile against a copy of the snapshotted
   workspace; web and browser tool results are replayed from the recording.
+
+```mermaid
+flowchart TD
+  R["Failed run, recorded"] --> H["Reviewer: hypotheses about why it failed"]
+  H --> T["Self-verifier: one small test per hypothesis, validated before it counts"]
+  H --> P["Reviewer: ranked candidate rewrites of SKILL.md"]
+  P --> S["Pick the next candidate (PUCT over the patch tree)"]
+  S --> X["Run the task with that candidate in a fresh isolated profile"]
+  T --> M[("Evidence matrix: rows are skill versions, columns are tests")]
+  X --> M
+  M --> D{"Checker passed? Or beats the original with no regression on a hard test?"}
+  D -- yes --> A["Apply via the skill ledger, keep the old file, log the change"]
+  D -- "no, budget left" --> H
+  D -- "no, budget spent" --> K["Keep the original"]
+```
+
+A real matrix from the evaluation (config-units, Qwen executing, Muse reviewing):
+
+| version | `t_ms_to_seconds_conversion` | official checker |
+|---|---|---|
+| v0 (original) | ✗ | fail |
+| v1 (rewrite) | ✓ | pass |
 
 Deliberate departures: the original skill is always a row in the matrix; a regression is only
 counted against what the original satisfied, so one bad test cannot zero every candidate; tests
