@@ -117,7 +117,7 @@ class HermesExecutor:
             cfg.setdefault("model", {})
             if not isinstance(cfg["model"], dict):
                 cfg["model"] = {}
-            cfg["model"].update(self.model_override)
+            cfg["model"].update({k: v for k, v in self.model_override.items() if k != "api_key"})
         return cfg
 
     def _prepare(self, skill_content: str, node_id: str, task: Task) -> Dict[str, Path]:
@@ -131,10 +131,11 @@ class HermesExecutor:
                 dst = home / "skills" / self.skill / child.name
                 shutil.copytree(child, dst) if child.is_dir() else shutil.copy2(child, dst)
         (home / "skills" / self.skill / "SKILL.md").write_text(skill_content)
-        for name in (".env",):
-            src = self.hermes_home / name
-            if src.exists():
-                shutil.copy2(src, home / name)
+        env_lines = (self.hermes_home / ".env").read_text().splitlines() if (self.hermes_home / ".env").exists() else []
+        key = (self.model_override or {}).get("api_key")
+        if key:   # a custom executor endpoint keys through OPENAI_API_KEY in the scratch profile
+            env_lines = [l for l in env_lines if not l.startswith("OPENAI_API_KEY=")] + [f"OPENAI_API_KEY={key}"]
+        (home / ".env").write_text("\n".join(env_lines) + ("\n" if env_lines else ""))
         plug_src = self.hermes_home / "plugins" / "skillhex"
         if plug_src.exists():
             (home / "plugins").mkdir(exist_ok=True)

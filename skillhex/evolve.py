@@ -44,31 +44,64 @@ def _read_env_file(p: Path) -> Dict[str, str]:
     return out
 
 
-def build_llm(hermes_home: Path, role: str = "reflector") -> OpenAICompatLLM:
-    """Reflection/verifier model: SKILLHEX_* env, else the profile's custom endpoint from config.yaml + .env."""
-    env = dict(_read_env_file(hermes_home / ".env"))
-    env.update({k: v for k, v in os.environ.items() if k.startswith(("SKILLHEX_", "OPENAI_"))})
-    model = env.get("SKILLHEX_MODEL")
-    base = env.get("SKILLHEX_BASE_URL")
-    key = env.get("SKILLHEX_API_KEY")
-    effort = env.get("SKILLHEX_REASONING_EFFORT")
+def _load_config(hermes_home: Path) -> Dict[str, Any]:
     cfg_path = hermes_home / "config.yaml"
     if yaml and cfg_path.exists():
-        cfg = yaml.safe_load(cfg_path.read_text()) or {}
-        m = cfg.get("model") or {}
-        if isinstance(m, dict):
-            model = model or m.get("default")
-            base = base or m.get("base_url")
-            effort = effort or m.get("reasoning_effort")
-    base = base or env.get("OPENAI_BASE_URL", "")
-    key = key or env.get("OPENAI_API_KEY", "")
+        try:
+            return yaml.safe_load(cfg_path.read_text()) or {}
+        except Exception:  # noqa: BLE001
+            log.warning("skillhex: could not parse %s", cfg_path, exc_info=True)
+    return {}
+
+
+def _aux_block(cfg: Dict[str, Any], task: str, env: Dict[str, str]) -> Dict[str, Any]:
+    """auxiliary.<task> as Hermes reads it: blank/auto fields mean inherit; key_env resolves a secret."""
+    aux = cfg.get("auxiliary") or {}
+    block = dict(aux.get(task) or {}) if isinstance(aux, dict) else {}
+    out: Dict[str, Any] = {}
+    for k in ("provider", "model", "base_url", "api_key", "api_mode", "reasoning_effort"):
+        v = str(block.get(k) or "").strip()
+        if v and v.lower() != "auto":
+            out[k] = v
+    key_env = str(block.get("key_env") or block.get("api_key_env") or "").strip()
+    if "api_key" not in out and key_env and env.get(key_env):
+        out["api_key"] = env[key_env]
+    return out
+
+
+def _runtime_env(hermes_home: Path) -> Dict[str, str]:
+    env = dict(_read_env_file(hermes_home / ".env"))
+    env.update(os.environ)          # the process environment wins over the profile's .env
+    return env
+
+
+REFLECTOR_TASK = "skillhex_reflector"
+EXECUTOR_TASK = "skillhex_executor"
+
+
+def resolve_reflector(hermes_home: Path) -> LLMConfig:
+    """Reflection + self-verification model. Precedence: SKILLHEX_* env > auxiliary.skillhex_reflector
+    (config.yaml, the block `hermes model` edits) > the profile's main model."""
+    env = _runtime_env(hermes_home)
+    cfg = _load_config(hermes_home)
+    main = cfg.get("model") if isinstance(cfg.get("model"), dict) else {}
+    aux = _aux_block(cfg, REFLECTOR_TASK, env)
+    model = env.get("SKILLHEX_MODEL") or aux.get("model") or main.get("default")
+    base = env.get("SKILLHEX_BASE_URL") or aux.get("base_url") or main.get("base_url") or env.get("OPENAI_BASE_URL", "")
+    key = env.get("SKILLHEX_API_KEY") or aux.get("api_key") or env.get("OPENAI_API_KEY", "")
+    effort = env.get("SKILLHEX_REASONING_EFFORT") or aux.get("reasoning_effort") or main.get("reasoning_effort")
     if not (base and model):
-        raise SystemExit("skillhex: no reflector model configured (set SKILLHEX_BASE_URL/SKILLHEX_MODEL or a custom model in config.yaml)")
-    return OpenAICompatLLM(LLMConfig(base_url=base, api_key=key, model=model, reasoning_effort=effort or None))
+        raise SystemExit("skillhex: no reflector model configured (set auxiliary.skillhex_reflector in config.yaml, "
+                         "SKILLHEX_BASE_URL/SKILLHEX_MODEL, or a custom main model)")
+    return LLMConfig(base_url=str(base), api_key=str(key or ""), model=str(model), reasoning_effort=effort or None)
+
+
+def build_llm(hermes_home: Path, role: str = "reflector") -> OpenAICompatLLM:
+    return OpenAICompatLLM(resolve_reflector(hermes_home))
 
 
 def executor_model_from_env() -> Optional[Dict[str, Any]]:
-    """SKILLHEX_EXECUTOR_MODEL / _BASE_URL / _PROVIDER let attempts run on a cheaper (or weaker) model than reflection."""
+    """SKILLHEX_EXECUTOR_MODEL / _BASE_URL / _PROVIDER: a cheaper (or weaker) model for evaluation attempts."""
     model = os.environ.get("SKILLHEX_EXECUTOR_MODEL")
     if not model:
         return None
@@ -77,6 +110,27 @@ def executor_model_from_env() -> Optional[Dict[str, Any]]:
         over["base_url"] = os.environ["SKILLHEX_EXECUTOR_BASE_URL"]
         over["provider"] = os.environ.get("SKILLHEX_EXECUTOR_PROVIDER", "custom")
         over["api_mode"] = "chat_completions"
+    return over
+
+
+def resolve_executor_model(hermes_home: Path) -> Optional[Dict[str, Any]]:
+    """Model override for evaluation attempts (a `model:` block patch for the scratch profile).
+    Precedence: SKILLHEX_EXECUTOR_* env > auxiliary.skillhex_executor > none (the main model)."""
+    over = executor_model_from_env()
+    if over:
+        return over
+    aux = _aux_block(_load_config(hermes_home), EXECUTOR_TASK, _runtime_env(hermes_home))
+    if not aux.get("model"):
+        return None
+    over = {"default": aux["model"]}
+    if aux.get("base_url"):
+        over["base_url"] = aux["base_url"]
+        over["provider"] = aux.get("provider", "custom")
+        over["api_mode"] = aux.get("api_mode", "chat_completions")
+    elif aux.get("provider"):
+        over["provider"] = aux["provider"]
+    if aux.get("api_key"):
+        over["api_key"] = aux["api_key"]
     return over
 
 
@@ -170,7 +224,7 @@ def evolve_skill(home: Path, hermes_home: Path, skill: str, *, episode: Optional
     run_dir.mkdir(parents=True, exist_ok=True)
     llm = llm or build_llm(hermes_home)
     replay_dir = store.dir(skill, episode.id) if episode and store.exists(skill, episode.id) else None
-    executor_model = executor_model or executor_model_from_env()
+    executor_model = executor_model or resolve_executor_model(hermes_home)
     executor = executor or HermesExecutor(hermes_home, skill, run_dir, replay_episode_dir=replay_dir, replay_mode=replay_mode,
                                           model_override=executor_model, root_episode=episode)
     cfg = SearchConfig(K=budget, early_stop_score=None if checker else min_score)

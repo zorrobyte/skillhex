@@ -345,6 +345,23 @@ def register(ctx) -> None:
     ctx.register_hook("post_llm_call", _on_post_llm_call)
     ctx.register_hook("on_session_end", _on_session_end)
     ctx.register_command("skillhex", handler=_slash, description="skillhex status | ok | fail <note> | evolve")
+    # Model routing uses Hermes's own auxiliary-task convention: both tasks appear in `hermes model`
+    # under "Auxiliary models" and live at auxiliary.skillhex_reflector / auxiliary.skillhex_executor.
+    # Blank = the main model. Set the reflector to a stronger tier (Sonnet acts, Opus reviews) or the
+    # executor to a cheaper/local one (Qwen acts, anything frontier reviews).
+    try:
+        ctx.register_auxiliary_task(
+            "skillhex_reflector", display_name="SkillHEX reviewer",
+            description="Writes failure hypotheses, self-verifier tests and skill patches after a skill-guided "
+                        "turn fails. Pick a stronger tier than the acting model when you can; blank = main model.",
+            defaults={"timeout": 300})
+        ctx.register_auxiliary_task(
+            "skillhex_executor", display_name="SkillHEX executor",
+            description="Runs candidate skills in throwaway profiles during evolution (many cheap attempts). "
+                        "Blank = main model; point it at a local/cheaper model to save tokens.",
+            defaults={"timeout": 600})
+    except Exception:  # noqa: BLE001
+        log.debug("skillhex: auxiliary task registration unavailable", exc_info=True)
     try:
         ctx.register_cli_command("skillhex", help="Evidence-gated skill evolution", setup_fn=_cli_setup, handler_fn=_cli_handler)
     except Exception:  # noqa: BLE001

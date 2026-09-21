@@ -65,3 +65,14 @@ def test_execute_runs_command_and_uses_checker(tmp_path, monkeypatch):
     assert res.episode.outcome_source == "checker"
     assert (ex.last_attempt_dir / "result.json").exists()
     assert res.episode.final_response == "done"
+
+
+def test_prepare_writes_an_executor_api_key_into_the_scratch_env_not_the_config(tmp_path):
+    hh = make_home(tmp_path)
+    ex = HermesExecutor(hh, "notes-cli", tmp_path / "runs",
+                        model_override={"default": "qwen", "base_url": "http://q/v1", "api_key": "exec-secret"})
+    paths = ex._prepare("---\nname: notes-cli\n---\nnew", "v1", Task(id="t", skill="notes-cli", prompt="p", cwd=None))
+    env = (paths["home"] / ".env").read_text()
+    assert "OPENAI_API_KEY=exec-secret" in env and "OPENAI_API_KEY=k" not in env
+    cfg = yaml.safe_load((paths["home"] / "config.yaml").read_text())
+    assert "api_key" not in cfg["model"]

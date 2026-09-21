@@ -34,3 +34,9 @@ def test_slash_ok_overrides_an_automatic_unknown_verdict(tmp_path, monkeypatch):
     ctx.hooks["pre_llm_call"](session_id="s1", user_message="hmm")   # heuristic: unknown, turn is now judged
     ctx.commands["skillhex"]("ok")
     assert [e.outcome for e in mod._store.list("notes")] == ["pass"]
+
+
+def test_plugin_registers_reviewer_and_executor_as_hermes_auxiliary_tasks(tmp_path):
+    mod, ctx, hh = load_plugin(tmp_path)
+    assert set(ctx.aux_tasks) == {"skillhex_reflector", "skillhex_executor"}
+    assert "review" in ctx.aux_tasks["skillhex_reflector"]["description"].lower()
