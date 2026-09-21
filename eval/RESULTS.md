@@ -50,5 +50,25 @@ mean pass rate: before 60%, no skill 100%, after 100%
   count that contradicts the prompt's own wording). Poisons that produce a plausible number (2500 seconds,
   1.5.0, "5 notes") stick, even with a frontier model. Those are the ones a real skill library accumulates.
 
+## Run 3: production regime, partial (Muse acts and reviews, NO checker during evolution, held-out variants)
+
+This is how the plugin actually runs from a session: the evolution step gets no checker and the evidence
+gate alone decides what to apply. The checker only grades the after columns. Each fixture also has a
+held-out variant (same task text, different data) so "after" isn't just the example the skill was repaired
+on. Stopped after two of five fixtures on 2026-09-21; the table is what completed.
+
+| fixture | before (poisoned) | no skill | after | before held-out | after held-out | evolve decision | attempts | reviewer tokens |
+|---|---|---|---|---|---|---|---|---|
+| config-units | 0/2 | 2/2 | 2/2 | 0/2 | 2/2 | apply (evidence score 1.00 ≥ 0.8, no checker available) | 2 | 13698 |
+| csv-report | 2/2 | 2/2 | 2/2 | 2/2 | 2/2 | apply (evidence score 1.00 ≥ 0.8, no checker available) | 5 | 161684 |
+
+mean pass rate: before 50%, no skill 100%, after 100%; held-out before 50%, after 100%
+
+Both rewrites were applied on evidence alone and then passed the checker on both the original and the
+held-out data. csv-report was rewritten even though the model was already passing, because the skill really
+is wrong (bad column mapping) and the reviewer's tests found that; in a live session nothing would have
+triggered a run there, since only a failure verdict starts one. Remaining fixtures (log-errors, notes,
+version-bump) not run in this mode yet.
+
 Reproduce: `HERMES_HOME=<profile> python eval/run_eval.py --out eval/results/<label> --n 2 --budget 5`,
 with `SKILLHEX_EXECUTOR_MODEL` / `SKILLHEX_EXECUTOR_BASE_URL` / `SKILLHEX_EXECUTOR_PROVIDER` set for run 2.
