@@ -1,24 +1,48 @@
 # skillhex
 
-Evidence-gated evolution of agent skills. An implementation of
-[SkillHEX: Improving Agent Skills via Hypothesis-Driven Autonomous Exploration and Exploitation](https://arxiv.org/abs/2608.05628)
-(Feng et al., 2026) for hosts that load `SKILL.md` files, shipped as a [Hermes Agent](https://github.com/NousResearch/hermes-agent) plugin.
+A Hermes Agent plugin that fixes broken skills automatically, and proves the fix works before it keeps it.
 
-**The problem.** Agents that "self-improve" by rewriting their own skills from a failed transcript,
-with the same model that just failed as the reviewer and no test, poison their skill library. Every
-later run reads the bad skill first and reproduces the mistake. skillhex makes a skill earn its place.
+## The problem
 
-**What it does, in one paragraph.** It records every turn in which a skill was loaded. It never asks
-the model whether the answer was good: the verdict comes from a task checker, or from what *you* said
-next, or from an explicit `/skillhex fail`. For a failed turn it works in the background: it writes
-falsifiable hypotheses about the failure, turns them into small executable tests that read the
-recording, tries rewritten versions of the skill in throwaway Hermes profiles, scores every version
-against every test in an evidence matrix, and searches the tree of rewrites so a wrong first
-diagnosis cannot eat the budget. A rewrite is applied only if it passes the checker or clearly beats
-the original on the evidence without regressing on anything the original got right. The tests stay
-with the skill as a regression suite; a later regression plus a "that's wrong" from you rolls the
-change back. Everything is logged, backed up, and reversible, and the agent itself can tell you what
-changed and undo it when you ask.
+Hermes and OpenClaw both learn skills from experience: after a run, a background pass reads the
+transcript and writes or edits a `SKILL.md`. That pass is done by the same model that just did the
+task, it never checks whether the task actually succeeded, and it never tests what it wrote.
+
+So when a run goes wrong, the skill learns the wrong thing. Example from a real OpenClaw log: the
+agent misread a weather API, got a wrong forecast, and the self-learning pass wrote a weather skill
+that bakes the misreading in. Every later weather question loads that skill first and repeats the
+mistake. Nobody is told, and nothing catches it.
+
+## What skillhex does instead
+
+It treats a skill like code: a change has to pass tests before it ships, and you can always revert.
+
+Walkthrough, using a notes skill that wrongly says archived notes are included in `notes.py list`:
+
+1. **You ask** "how many notes do I have, including archived?" The skill loads, the agent runs
+   `notes.py list`, answers 5. skillhex records the turn: your prompt, every tool call and result,
+   the answer, and a copy of the working directory from before the agent touched it.
+2. **You reply** "no, that's wrong, it's 7." skillhex reads your next message as the verdict. The
+   agent's own opinion of its answer never counts. A checker script can play the same role.
+3. **In the background**, in a separate process, skillhex:
+   - asks a reviewer model why the run failed, as concrete claims ("the skill never passes
+     `--include-archived`");
+   - turns each claim into a small Python test that reads the recording and fails on the bad run;
+   - rewrites the skill, and runs the task again with the rewritten skill in a throwaway Hermes
+     profile that contains nothing but that skill and a copy of your files;
+   - scores every version against every test, tries a few rewrites, and backs off a bad idea
+     instead of spending the whole budget on it.
+4. **It keeps the rewrite only if** it passes the checker, or clearly beats the original on the
+   tests without breaking anything the original got right. Otherwise the skill is left alone.
+   The write goes through Hermes's skill ledger and the old version is kept for undo.
+5. **Next session**, the agent knows what changed. "What did you change?" gets an explanation.
+   "Undo that" restores the old version. The tests stay with the skill and re-run the next time
+   it is used on a similar task; if they fail again and you say the answer was wrong, the change
+   is rolled back by itself.
+
+You never get a prompt. If you have turned on Hermes's approval gate for skill writes
+(`skills.write_approval: true`), skillhex stages its change for `/skills approve` instead of
+applying it.
 
 ## Install
 
@@ -27,167 +51,119 @@ hermes plugins install zorrobyte/skillhex
 hermes plugins enable skillhex
 ```
 
+Add to `~/.hermes/config.yaml`:
+
 ```yaml
-# ~/.hermes/config.yaml
 plugins:
   enabled: [skillhex]
 skills:
-  creation_nudge_interval: 0     # let skillhex own skill learning (memory review is untouched)
+  creation_nudge_interval: 0     # stop the built-in skill self-learning; memory review is untouched
 ```
 
-That is all. Nothing prompts you. `hermes plugins doctor skillhex` confirms the install.
+Done. `hermes plugins doctor skillhex` confirms it loaded.
 
-## Models: one or two, your call
+## Which model does what
 
-skillhex has two model roles. The **executor** acts: it is the model that runs the task, both live
-and in each evaluation attempt. The **reviewer** thinks about failures: it writes hypotheses, tests,
-and rewrites. Both are ordinary Hermes auxiliary tasks, so they appear under `hermes model` →
-*Auxiliary models*, next to compression and vision.
+Two jobs. The **executor** does the task (live, and again in each test run). The **reviewer**
+diagnoses failures and writes tests and rewrites. Both are ordinary Hermes auxiliary tasks: pick them
+under `hermes model` → *Auxiliary models*, like the compression or vision model.
 
-| mode | executor | reviewer | when |
-|---|---|---|---|
-| single model (default) | main model | main model | nothing configured. Still better than same-model self-review: the reviewer must state falsifiable claims and is graded by test execution and by your words, never by its own opinion |
-| tiered, same vendor | e.g. Sonnet | e.g. Opus | most paying users. The stronger tier is called only when a turn failed; the cheap tier does the volume |
-| local + frontier | e.g. Qwen 27B on your GPU | any frontier model | small models cannot diagnose themselves; this is where the gain is largest |
+- **One model for everything** (default, nothing to configure). Still much safer than what you have
+  now: the reviewer has to state testable claims and is graded by running the tests and by what you
+  said, not by its own opinion.
+- **Cheap model acts, strong model reviews.** Sonnet or a local model does the volume; Opus or a
+  frontier model is called only when a run failed. This is the sweet spot.
+- **Local model acts, any frontier model reviews.** Small models cannot diagnose their own
+  mistakes. This is where the plugin helps most.
 
 ```yaml
 auxiliary:
-  skillhex_reflector:            # the reviewer
-    model: claude-opus-5         # blank = main model
-    # base_url / api_key / key_env / reasoning_effort as for any auxiliary task
-  skillhex_executor:             # the acting model for evaluation attempts
+  skillhex_reflector:          # the reviewer (blank = main model)
+    model: claude-opus-5
+  skillhex_executor:           # the model that runs test attempts (blank = main model)
     model: qwen3-27b
     base_url: http://gpu:8000/v1
     provider: custom
 ```
 
-`SKILLHEX_MODEL` / `SKILLHEX_BASE_URL` / `SKILLHEX_API_KEY` / `SKILLHEX_REASONING_EFFORT` and
-`SKILLHEX_EXECUTOR_MODEL` / `_BASE_URL` / `_PROVIDER` override the config for one process.
+## Commands
 
-## Using it
-
-You mostly do not. When something changed, the agent knows: a short system-prompt section lists
-recent skillhex changes, so "what did you change?", "why?", and "undo that" work in conversation
-(the agent has a `skillhex` tool with `status`, `show`, `undo`, `mark`, `runs`; it only undoes on request).
-
-| surface | what |
+| | |
 |---|---|
-| `/skillhex` | status: episodes per skill, pending failures, recent runs and changes |
-| `/skillhex show <skill>` | diff of the last change, last run's decision, report path |
-| `/skillhex undo <skill>` | restore the previous SKILL.md |
-| `/skillhex ok` / `/skillhex fail <note>` | grade the most recent skill-guided turn yourself |
-| `/skillhex runs`, `/skillhex evolve` | list runs; start a run for pending failures now |
-| `hermes skillhex status \| episodes \| report [--open] \| evolve \| undo --skill X` | the same from a shell; `report --open` opens the HTML report (diff, evidence matrix, patch tree) |
-| `skill_view("skillhex:guide")` | a bundled skill that teaches the agent how to operate all of this |
+| `/skillhex` | what has been captured, what failed, what changed |
+| `/skillhex show <skill>` | diff of the last change and the run that made it |
+| `/skillhex undo <skill>` | put the previous version back |
+| `/skillhex ok` / `/skillhex fail <why>` | grade the last skill-guided answer yourself |
+| `/skillhex runs`, `/skillhex evolve` | list runs; start one now |
+| `hermes skillhex report --open` | open the last run's report in a browser: diff, tests, results |
+| `hermes skillhex status \| episodes \| evolve \| undo --skill X` | the same from a shell |
 
-If `skills.write_approval: true` is set, winners are staged for `/skills pending` / `/skills approve <id>`
-instead of applied. skillhex respects the gate you chose; it never adds one.
+The agent has a `skillhex` tool too, so you can just say "what did you change to the notes skill?"
+or "revert that". It only undoes when you ask.
 
 ## Settings
 
-`plugins.entries.skillhex.settings` in config.yaml:
+Under `plugins.entries.skillhex.settings` in config.yaml. Defaults are fine.
 
-| key | default | meaning |
+| key | default | |
 |---|---|---|
-| `auto_evolve` | true | start a background run after a failed skill-guided turn |
-| `budget` | 5 | evaluation attempts per run (the paper's K) |
-| `min_score_to_apply` | 0.8 | without a checker, a candidate must reach this evidence score and beat the original |
-| `auto_rollback` | true | roll back a patch when a banked hard test fails on reuse and you then say the answer was wrong |
-| `classify_followups` | true | use the host model to judge whether your next message says the answer failed; false = keyword heuristic only |
-| `bank_min_similarity` | 0.5 | prompt similarity (0..1) needed before a skill's banked tests re-run on a new task |
-| `snapshot_max_bytes` | 50 MiB | skip the working-directory snapshot above this size |
-| `replay_mode` | permissive | cassette replay of network tools in evaluation attempts: permissive (unmatched calls run live) or strict (blocked) |
-| `changes_window_days` | 7 | how far back the agent is told about skillhex changes at session start |
+| `auto_evolve` | true | investigate failed runs in the background |
+| `budget` | 5 | test attempts per investigation |
+| `min_score_to_apply` | 0.8 | without a checker, how convincingly a rewrite must beat the original |
+| `auto_rollback` | true | revert a change if its tests fail on reuse and you say the answer was wrong |
+| `classify_followups` | true | use the model to read your next message as ok/wrong; false = keywords only |
+| `bank_min_similarity` | 0.5 | how similar a new task must be before a skill's saved tests re-run |
+| `snapshot_max_bytes` | 50 MiB | skip copying the working directory above this size |
+| `replay_mode` | permissive | in test runs, web/browser tool results are replayed from the recording; strict blocks unrecorded ones |
+| `changes_window_days` | 7 | how far back the agent is told about changes |
 
-## How it works
+Cost: an investigation is roughly 20k reviewer tokens plus up to `budget` short agent runs. It only
+happens after a failure.
 
-1. **Capture.** Every turn with a skill loaded becomes an *episode*: transcript, every tool call and
-   result, and a snapshot of the working directory taken when the skill loaded. That is the cassette.
-2. **Outcome bit.** Never the acting model. A checker script, or the host model classifying your
-   *next* message (looked at once), or `/skillhex ok|fail`. Unknown stays unknown.
-3. **Hypotheses → tests.** The reviewer maintains failure hypotheses (add / refine / refute / drop a
-   test it distrusts). A self-verifier turns them into Python tests that read the cassette and print
-   `SELF_VERIFIER_RESULT=PASS|FAIL`. Tests are syntax-checked and dry-run before they count.
-4. **Evidence matrix.** Rows are skill versions, columns are tests. A new test replays across every
-   cached attempt; a new version runs against every test. Ranking weight goes to *discriminative*
-   columns; a hard-test regression is only measured against what the original satisfied, so one bad
-   LLM-written test cannot zero every candidate.
-5. **Patch tree search.** Candidates form a persistent tree. PUCT with max-backup, priors from the
-   reviewer's ordinal ranking, first-play urgency (Appendix E, Algorithm 1).
-6. **Fresh attempt per node.** Each candidate runs in a fresh isolated Hermes profile holding only
-   that skill version, in a copy of the snapshotted workspace; network tool results are replayed from
-   the cassette, local tools run live in the copy. No side effects on your files.
-7. **Apply behind the gate.** Through the host's skill ledger, with a backup for undo. The original
-   is always a row in the matrix, so a rewrite that scores below it is visibly worse and is not applied.
-8. **Regression bank.** Tests some version satisfied travel with the skill and re-run whenever it is
-   loaded for a similar task.
+## Does it work?
 
-## Layout
+Unit tests: 138, no network. Live, on a deliberately poisoned notes skill (2026-09-21):
 
-```
-skillhex/                core, host-agnostic, stdlib only
-  models.py              Episode, ToolCall
-  episodes.py            cassette store; which failures an evolution run has consumed
-  hypotheses.py          add / refine / refute / drop_test
-  bank.py                self-verifier test bank + validator
-  evidence.py            SQLite evidence matrix
-  tree.py                patch tree: rank prior, PUCT, max-backup, FPU
-  scoring.py             regression gate vs. root, discriminative-column ranking
-  search.py              Algorithm 1 with injected Reflector / Verifier / Executor
-  reflect.py, verify.py  LLM-backed roles (prompts in prompts/, from the paper's Appendix A)
-  capture.py, replay.py  turn recorder; cassette replay of network tools
-  outcome.py             follow-up classification
-  workspace.py           snapshots; restore the pre-attempt state
-  regress.py             per-skill regression bank; rollback
-  session_state.py       per-session state that survives host restarts
-  changes.py             what skillhex changed (feeds the agent's prompt section)
-  report.py              per-run artifacts and the HTML report
-  evolve.py              runner: model routing → grade → search → gate → apply/stage → report
-  executors/hermes.py    fresh Hermes profile per attempt
-plugin.yaml, __init__.py the Hermes plugin (the repo root is the plugin)
-skills/guide/SKILL.md    bundled skill: how the agent operates skillhex
-fixtures/notes/          deterministic fixture: a notes CLI, a poisoned skill, a checker
-tests/                   pytest, no network, no LLM
-```
+| setup | verdict came from | result |
+|---|---|---|
+| Muse acts and reviews, checker available | checker | fixed in 1 attempt, applied |
+| Muse acts and reviews, no checker | my reply "no, that's wrong" | fixed in 1 attempt, applied; tests re-ran on the next use |
+| Qwen3 27B (local) acts, Muse reviews | checker | fixed in 2 attempts, applied |
 
-## Running the fixture by hand
+Before/after on five poisoned skills (CSV totals, log counting, semver bump, config units, notes),
+each measured with real agent runs graded by a checker: see [`eval/RESULTS.md`](eval/RESULTS.md).
+`eval/run_eval.py` reproduces it.
 
-```bash
-HERMES_HOME=~/skillhex-home hermes chat -Q -q "$(jq -r .prompt fixtures/notes/task.json)" \
-    --yolo --in /tmp/ws --max-turns 20            # captured as a failed episode (poisoned skill says 5, truth is 7)
-HERMES_HOME=~/skillhex-home hermes skillhex evolve --skill notes-cli \
-    --checker fixtures/notes/checker.py --cwd fixtures/notes/workspace --budget 5
-HERMES_HOME=~/skillhex-home hermes skillhex report --open
-```
+Honest limits. The gain is the gate more than the search: even one tested candidate beats writing
+a skill from a failed transcript with no check. The paper's numbers come from benchmarks with
+ground-truth checkers. Most real tasks have none, so the tests are model-written, and in
+single-model mode the same model writes them. That is better than self-grading, not the same as
+ground truth. Frontier models also sometimes ignore a bad skill and get the answer right anyway,
+which limits what a rewrite can add.
 
-## What differs from the paper, deliberately
+## Under the hood
 
-- Tests belong to the skill and travel with it as a regression suite; a hard failure plus a user
-  "that's wrong" rolls the patch back.
-- The original skill is always a row in the matrix.
-- Static lint rejects a malformed candidate before an attempt is spent.
-- Outcome from user corrections and checkers only. The acting model's self-report is never a reward.
-- The reviewer can drop a test it distrusts instead of inventing hypotheses to satisfy it.
+This is an implementation of [SkillHEX (Feng et al., 2026)](https://arxiv.org/abs/2608.05628),
+"hypothesis-driven autonomous exploration and exploitation" for skills. In the paper's terms:
 
-## Status and honest limits
+- an *episode* is the recording of one skill-guided turn (transcript, tool calls, files);
+- the reviewer maintains failure *hypotheses* (add, refine, refute, or drop a test it distrusts);
+- a *self-verifier* writes tests that print `SELF_VERIFIER_RESULT=PASS|FAIL`; they are validated
+  before they count;
+- the *evidence matrix* is versions × tests; a new test is replayed across cached attempts, a new
+  version runs against all tests;
+- candidate rewrites form a *patch tree* searched with PUCT, max-backup and first-play urgency
+  (Appendix E, Algorithm 1), so a wrong first diagnosis cannot consume the budget;
+- each attempt runs in a fresh, isolated Hermes profile against a copy of the snapshotted
+  workspace; web and browser tool results are replayed from the recording.
 
-Core and plugin are unit tested (131 tests, no network). Live runs on the notes fixture (2026-09-21),
-reviewer on Muse Spark 1.3 in every case:
+Deliberate departures: the original skill is always a row in the matrix; a regression is only
+counted against what the original satisfied, so one bad test cannot zero every candidate; tests
+travel with the skill as a regression suite; static lint rejects malformed candidates before an
+attempt is spent; the verdict never comes from the acting model.
 
-| run | executor | outcome source | attempts | result |
-|---|---|---|---|---|
-| manual, checker | Muse | checker grades the captured episode | 1 | official pass, applied via ledger |
-| autonomous, no checker | Muse | user's next message classified by the host model | 1 | evidence 1.00 vs 0.00, early stop, applied; six tests banked and re-run on the next use |
-| weak model, checker | Qwen3.8-27B (local vLLM) | checker | 2 | official pass, applied |
+Layout: `skillhex/` is the host-agnostic core (stdlib only), `__init__.py` + `plugin.yaml` at the
+root are the Hermes plugin, `skills/guide/` is a bundled skill that teaches the agent to operate it,
+`fixtures/` and `eval/` are the test tasks, `tests/` is pytest.
 
-Each run used about 22k reviewer tokens.
-
-The benefit is the gate more than the search: even one gated candidate beats writing a skill from a
-failed transcript with no check. The paper's gains come from benchmarks with ground-truth checkers.
-In the wild most tasks have no checker, so the evidence rests on LLM-written tests; in single-model
-mode the same model writes them. That is better than self-grading, not the same as ground truth.
-See `eval/` for the before-and-after measurement on deliberately broken skills.
-
-## License
-
-MIT
+MIT.
