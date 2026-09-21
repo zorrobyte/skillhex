@@ -1,0 +1,1 @@
+{"prompt": "Bump the patch version of the project in this directory (package.json) for a bug-fix release, update package.json, and write just the new version string to answer.txt in this directory. Load the version-bump skill first.", "checker": "checker.py", "expected": "1.4.10"}

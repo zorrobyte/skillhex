@@ -1,0 +1,12 @@
+2026-09-20T10:00:01Z INFO  api        server started on :8080
+2026-09-20T10:00:05Z ERROR db         connection refused (attempt 1)
+2026-09-20T10:00:06Z ERROR db         connection refused (attempt 2)
+2026-09-20T10:00:07Z INFO  db         connected
+2026-09-20T10:01:00Z ERROR healthcheck upstream returned 503
+2026-09-20T10:01:30Z ERROR healthcheck upstream returned 503
+2026-09-20T10:02:00Z WARN  api        slow request 2.1s
+2026-09-20T10:02:10Z INFO  api        ERROR budget reset for tenant 42
+2026-09-20T10:03:00Z ERROR api        unhandled exception in /export
+2026-09-20T10:03:30Z INFO  healthcheck ok
+2026-09-20T10:04:00Z ERROR worker     job 118 failed: timeout
+2026-09-20T10:05:00Z ERROR healthcheck upstream returned 502

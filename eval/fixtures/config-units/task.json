@@ -1,0 +1,1 @@
+{"prompt": "service.ini in this directory configures a service. What is the server request timeout, in seconds? Write just the number to answer.txt in this directory. Load the config-units skill first.", "checker": "checker.py", "expected": "2.5"}

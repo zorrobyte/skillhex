@@ -1,0 +1,6 @@
+{
+  "name": "widget-service",
+  "version": "1.4.9",
+  "private": true,
+  "scripts": {"test": "node test.js"}
+}

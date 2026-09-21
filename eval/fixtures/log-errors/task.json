@@ -1,0 +1,1 @@
+{"prompt": "app.log in this directory is an application log. Count the lines whose log level is ERROR, excluding lines logged by the healthcheck module, and write just that integer to answer.txt in this directory. Load the log-errors skill first.", "checker": "checker.py", "expected": "4"}

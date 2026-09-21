@@ -1,0 +1,9 @@
+# exported 2026-09-20 from sales-db; do not edit
+order_id,customer,region,amount,currency
+1001,acme,EU,120.50,EUR
+1002,globex,US,80.00,USD
+1003,initech,EU,99.25,EUR
+1004,acme,EU,10.00,EUR
+1005,umbrella,APAC,300.00,USD
+1006,globex,EU,45.75,EUR
+TOTAL,,,655.50,
