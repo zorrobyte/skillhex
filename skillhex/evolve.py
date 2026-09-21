@@ -24,6 +24,8 @@ from .reflect import LLMReflector
 from .regress import SkillBank
 from .search import SkillSearch, SearchConfig, Task, SearchResult
 from .verify import LLMVerifier
+from .changes import ChangeLog
+from .report import write_artifacts, render_html
 
 log = logging.getLogger("skillhex.evolve")
 
@@ -157,6 +159,7 @@ def _stage_skill(hermes_home: Path, skill: str, content: str, evidence: Dict[str
     gist = (f"skillhex: rewrite '{skill}'" + (f" — {desc}" if desc else "")
             + f" (evidence {score:.2f}" if isinstance(score, (int, float)) else f"skillhex: rewrite '{skill}' (")
     gist += ", official pass)" if evidence.get("official") == 1 else ")"
+    evidence["pending_id"] = pid
     record = {"id": pid, "subsystem": "skills", "action": "edit", "summary": gist, "origin": "background_review",
               "created_at": time.time(), "payload": {"action": "edit", "name": skill, "content": content},
               "skillhex": evidence}
@@ -290,13 +293,24 @@ def evolve_skill(home: Path, hermes_home: Path, skill: str, *, episode: Optional
     except Exception:  # noqa: BLE001
         log.debug("bank absorb failed", exc_info=True)
     applied = None
+    evidence = {"run": str(run_dir), "node": best.id if best else None, "score": best.score if best else None,
+                "official": best.reward if best else None, "decision": decision}
     if apply and decision.startswith("apply"):
-        applied = _apply_skill(hermes_home, skill, best.content, {"run": str(run_dir), "node": best.id, "score": best.score,
-                                                                  "official": best.reward, "decision": decision})
+        applied = _apply_skill(hermes_home, skill, best.content, evidence)
+        ChangeLog(home / "changes.jsonl").append(
+            skill=skill, kind="staged" if applied.startswith("staged") else "applied", decision=decision, run=str(run_dir),
+            score=best.score, official=best.reward, pending_id=evidence.get("pending_id"))
     report = _report(run_dir, skill, task, result, search, decision + (f"; {applied}" if applied else ""), llm)
+    write_artifacts(run_dir, skill=skill, task_prompt=task.prompt, decision=decision, passed=result.passed,
+                    executor_calls=result.executor_calls, matrix_text=result.matrix_text, tree_text=result.tree_text,
+                    hypotheses=search.hypotheses.summary(), root_content=initial,
+                    best_content=best.content if best else initial, best_id=best.id if best else root.id,
+                    best_score=best.score if best else root.score, root_score=root.score, llm_usage=llm.usage, applied=applied)
+    html_report = render_html(run_dir)
     summary = {"skill": skill, "status": "done", "passed": result.passed, "decision": decision, "applied": applied,
                "best": best.id if best else None, "best_score": best.score if best else None, "root_score": root.score,
-               "executor_calls": result.executor_calls, "report": str(report), "run": str(run_dir), "llm_usage": llm.usage}
+               "executor_calls": result.executor_calls, "report": str(report), "html": str(html_report), "run": str(run_dir),
+               "llm_usage": llm.usage}
     (run_dir / "summary.json").write_text(json.dumps(summary, indent=2))
     # every failure this run could have learned from is consumed; a later failure schedules a new run
     store.mark_evolved(skill, consumed, run=str(run_dir))
@@ -322,9 +336,33 @@ def cli_entry(args, home: Path, hermes_home: Path, min_score: float = 0.8, repla
         return 0
     if action == "report":
         runs = sorted((home / "runs").glob("*/REPORT.md")) if (home / "runs").exists() else []
-        if runs:
+        if args.skill:
+            runs = [r for r in runs if r.parent.name.startswith(args.skill + "-")]
+        if not runs:
+            print("no runs yet")
+            return 0
+        run_dir = runs[-1].parent
+        if getattr(args, "open", False):
+            html_path = run_dir / "report.html"
+            if not html_path.exists() and (run_dir / "artifacts.json").exists():
+                html_path = render_html(run_dir)
+            import webbrowser
+            webbrowser.open(html_path.as_uri())
+            print(f"opened {html_path}")
+        else:
             print(runs[-1].read_text())
         return 0
+    if action == "undo":
+        from .regress import rollback_skill
+        if not args.skill:
+            print("--skill required", file=sys.stderr)
+            return 2
+        if rollback_skill(hermes_home, args.skill):
+            ChangeLog(home / "changes.jsonl").append(skill=args.skill, kind="undone", decision="user undo (cli)", run=None)
+            print(f"restored the previous SKILL.md for {args.skill}")
+            return 0
+        print(f"nothing to undo for {args.skill} (no skillhex backup)")
+        return 1
     if action == "evolve":
         if not args.skill:
             print("--skill required", file=sys.stderr)

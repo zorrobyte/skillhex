@@ -34,6 +34,7 @@ from pathlib import Path
 from typing import Any, Dict, Optional
 
 from skillhex.capture import TurnRecorder
+from skillhex.changes import ChangeLog
 from skillhex.episodes import EpisodeStore
 from skillhex.llm import extract_json
 from skillhex.models import Episode
@@ -105,6 +106,20 @@ def _write_pending_state() -> None:
         (_home / "status.json").write_text(json.dumps(summary, indent=2))
     except Exception:  # noqa: BLE001
         log.debug("skillhex: status write failed", exc_info=True)
+
+
+def _changes() -> ChangeLog:
+    return ChangeLog(_home / "changes.jsonl")
+
+
+def _prompt_section(info=None) -> str:
+    """Frozen into each new session's system prompt: what skillhex changed recently, and how the agent
+    should act on 'what changed?' / 'undo that' / 'that was wrong'."""
+    try:
+        return _changes().render_for_prompt(days=float(_cfg("changes_window_days", 7)))
+    except Exception:  # noqa: BLE001
+        log.debug("skillhex: prompt section failed", exc_info=True)
+        return ""
 
 
 def _bank_for(skill: str) -> SkillBank:
@@ -278,52 +293,184 @@ def _maybe_schedule_evolution(skills: Optional[list]) -> None:
         log.warning("skillhex: could not start evolution", exc_info=True)
 
 
-# ---------------------------------------------------------------------------- commands
-def _slash(raw_args: str = "") -> str:
-    parts = (raw_args or "").split(None, 1)
-    sub = parts[0].lower() if parts else "status"
-    note = parts[1] if len(parts) > 1 else ""
-    if sub in ("ok", "fail"):
-        sid, last = _sessions.most_recent() if _sessions else (None, None)
-        if not last:
-            return "skillhex: no skill-guided turn to mark"
-        marked = []
-        for skill, ep_id in last.get("episodes", []):
-            try:
-                _store.set_outcome(skill, ep_id, "pass" if sub == "ok" else "fail", source="user", note=note or None)
-                marked.append(skill)
-            except Exception:  # noqa: BLE001
-                log.debug("skillhex: set_outcome failed", exc_info=True)
-        last["resolved"] = True
-        _sessions.resolve(sid)
-        if sid in _last_by_session:
-            _last_by_session[sid]["resolved"] = True
-        _write_pending_state()
-        if sub == "fail":
-            _on_fail(last, note)
-        return f"skillhex: marked the last skill-guided turn ({', '.join(marked) or 'no skill'}) as {sub}"
-    if sub == "evolve":
-        _maybe_schedule_evolution(None)
-        return "skillhex: evolution scheduled (see skillhex/evolve.log)"
+# ---------------------------------------------------------------------------- commands / tool
+def _skill_dir(skill: str):
+    from skillhex.executors.hermes import find_skill_dir
+    return find_skill_dir(skill, _hermes_home)
+
+
+def _runs_for(skill: Optional[str] = None) -> list:
+    out = []
+    for p in sorted((_home / "runs").glob("*/summary.json")) if (_home / "runs").exists() else []:
+        if skill and not p.parent.name.startswith(skill + "-"):
+            continue
+        try:
+            d = json.loads(p.read_text())
+        except json.JSONDecodeError:
+            continue
+        d["dir"] = str(p.parent)
+        out.append(d)
+    return out
+
+
+def _status() -> str:
     lines = [f"skillhex home: {_home}"]
-    for s in _store.skills():
+    skills = _store.skills()
+    if not skills:
+        lines.append("no skill-guided turns captured yet")
+    for s in skills:
         eps = _store.list(s)
-        lines.append(f"- {s}: {len(eps)} episodes, {len([e for e in eps if e.outcome == 'fail'])} failed, "
-                     f"{len([e for e in eps if e.outcome is None])} pending")
+        pend = len(_store.list(s, outcome="fail", unevolved=True))
+        lines.append(f"- {s}: {len(eps)} episodes, {len([e for e in eps if e.outcome == 'fail'])} failed"
+                     f"{f' ({pend} awaiting evolution)' if pend else ''}, {len([e for e in eps if e.outcome is None])} unjudged")
+    runs = _runs_for()
+    if runs:
+        lines.append(f"runs: {len(runs)} (latest: {Path(runs[-1]['dir']).name} — {runs[-1].get('decision')})")
+    recent = _changes().recent(limit=5)
+    if recent:
+        lines.append("recent changes:")
+        lines += ["  " + ChangeLog.describe(r) for r in recent]
+    lock = _home / "evolve.lock"
+    if lock.exists() and time.time() - lock.stat().st_mtime < 3600:
+        lines.append("an evolution run is in progress (see skillhex/evolve.log)")
     return "\n".join(lines)
 
 
+def _show(skill: str) -> str:
+    if not skill:
+        return "usage: show <skill>"
+    d = _skill_dir(skill)
+    if d is None:
+        return f"skillhex: no skill named {skill}"
+    import difflib
+    cur = (d / "SKILL.md").read_text() if (d / "SKILL.md").exists() else ""
+    prev_p = d / "SKILL.md.skillhex-prev"
+    lines = [f"{skill}: {d / 'SKILL.md'}"]
+    runs = _runs_for(skill)
+    if runs:
+        r = runs[-1]
+        lines.append(f"last run: {Path(r['dir']).name} — {r.get('decision')} (attempts {r.get('executor_calls')}); "
+                     f"report: {r.get('html') or r.get('report')}")
+    if prev_p.exists():
+        diff = "".join(difflib.unified_diff(prev_p.read_text().splitlines(keepends=True), cur.splitlines(keepends=True),
+                                            fromfile="previous/SKILL.md", tofile="current/SKILL.md"))
+        lines.append(diff or "(previous version identical)")
+    else:
+        lines.append("no previous version kept (skillhex has not changed this skill, or the change was undone)")
+    return "\n".join(lines)
+
+
+def _undo(skill: str, who: str = "user") -> str:
+    if not skill:
+        return "usage: undo <skill>"
+    if rollback_skill(_hermes_home, skill):
+        _changes().append(skill=skill, kind="undone", decision=f"{who} undo", run=None)
+        return f"skillhex: restored the previous SKILL.md for {skill}"
+    return f"skillhex: nothing to undo for {skill} (no backup of an earlier version)"
+
+
+def _runs_text() -> str:
+    runs = _runs_for()
+    if not runs:
+        return "skillhex: no runs yet"
+    return "\n".join(f"{Path(r['dir']).name}: {r.get('decision')} (attempts {r.get('executor_calls')}) {r.get('html') or ''}"
+                     for r in runs[-20:])
+
+
+def _mark(verdict: str, note: str = "") -> str:
+    sid, last = _sessions.most_recent() if _sessions else (None, None)
+    if not last:
+        return "skillhex: no skill-guided turn to mark"
+    marked = []
+    for skill, ep_id in last.get("episodes", []):
+        try:
+            _store.set_outcome(skill, ep_id, "pass" if verdict == "ok" else "fail", source="user", note=note or None)
+            marked.append(skill)
+        except Exception:  # noqa: BLE001
+            log.debug("skillhex: set_outcome failed", exc_info=True)
+    last["resolved"] = True
+    _sessions.resolve(sid)
+    if sid in _last_by_session:
+        _last_by_session[sid]["resolved"] = True
+    _write_pending_state()
+    if verdict == "fail":
+        _on_fail(last, note)
+    return f"skillhex: marked the last skill-guided turn ({', '.join(marked) or 'no skill'}) as {verdict}"
+
+
+_HELP = ("/skillhex            status\n/skillhex show <skill>   diff of the last change + last run\n"
+         "/skillhex undo <skill>   restore the previous version\n/skillhex ok|fail [note]  grade the last skill-guided turn\n"
+         "/skillhex runs           list evolution runs\n/skillhex evolve         start a run for pending failures now")
+
+
+def _slash(raw_args: str = "") -> str:
+    parts = (raw_args or "").split(None, 1)
+    sub = parts[0].lower() if parts else "status"
+    rest = parts[1].strip() if len(parts) > 1 else ""
+    if sub in ("ok", "fail"):
+        return _mark(sub, rest)
+    if sub == "show":
+        return _show(rest)
+    if sub == "undo":
+        return _undo(rest)
+    if sub == "runs":
+        return _runs_text()
+    if sub == "evolve":
+        _maybe_schedule_evolution(None)
+        return "skillhex: evolution scheduled (see skillhex/evolve.log)"
+    if sub in ("help", "-h", "--help"):
+        return _HELP
+    return _status()
+
+
+_TOOL_SCHEMA = {
+    "name": "skillhex",
+    "description": ("Inspect or act on skillhex, the plugin that evolves skills after failed skill-guided turns. "
+                    "status: what it captured and changed. show: diff of a skill's last change and its run. "
+                    "undo: restore a skill's previous version (only when the user asks). "
+                    "mark: record the user's verdict (ok|fail) on the most recent skill-guided turn. runs: list runs."),
+    "parameters": {"type": "object",
+                   "properties": {"action": {"type": "string", "enum": ["status", "show", "undo", "mark", "runs"]},
+                                  "skill": {"type": "string", "description": "skill name for show/undo"},
+                                  "verdict": {"type": "string", "enum": ["ok", "fail"], "description": "for mark"},
+                                  "note": {"type": "string", "description": "for mark: what the user said was wrong"}},
+                   "required": ["action"]},
+}
+
+
+def _tool(args: Dict[str, Any], **kw) -> str:
+    a = str((args or {}).get("action") or "").lower()
+    skill = str((args or {}).get("skill") or "")
+    if a == "status":
+        return _status()
+    if a == "show":
+        return _show(skill)
+    if a == "undo":
+        return _undo(skill, who="agent (on user request)")
+    if a == "mark":
+        v = str((args or {}).get("verdict") or "").lower()
+        if v not in ("ok", "fail"):
+            return "skillhex: verdict must be ok or fail"
+        return _mark(v, str((args or {}).get("note") or ""))
+    if a == "runs":
+        return _runs_text()
+    return f"skillhex: unknown action {a!r} (status|show|undo|mark|runs)"
+
+
 def _cli_setup(sub) -> None:
-    sub.add_argument("action", nargs="?", default="status", choices=["status", "evolve", "episodes", "report"])
+    sub.add_argument("action", nargs="?", default="status", choices=["status", "evolve", "episodes", "report", "undo"])
     sub.add_argument("--skill")
+    sub.add_argument("--open", action="store_true", help="report: open the HTML report in a browser")
     sub.add_argument("--task-prompt", help="override the task prompt used for evaluation attempts")
     sub.add_argument("--checker", help="path to a checker script (exit 0 = pass) for the task")
     sub.add_argument("--cwd", help="workspace directory the task runs in")
-    sub.add_argument("--budget", type=int, default=5)
+    sub.add_argument("--budget", type=int, default=None)
 
 
 def _cli_handler(args) -> int:
     from skillhex.evolve import cli_entry
+    if getattr(args, "budget", None) is None:
+        args.budget = int(_cfg("budget", 5))
     return cli_entry(args, home=_home, hermes_home=_hermes_home,
                      min_score=float(_cfg("min_score_to_apply", 0.8)), replay_mode=str(_cfg("replay_mode", "permissive")))
 
@@ -350,7 +497,23 @@ def register(ctx) -> None:
     ctx.register_hook("pre_llm_call", _on_pre_llm_call)
     ctx.register_hook("post_llm_call", _on_post_llm_call)
     ctx.register_hook("on_session_end", _on_session_end)
-    ctx.register_command("skillhex", handler=_slash, description="skillhex status | ok | fail <note> | evolve")
+    ctx.register_command("skillhex", handler=_slash, args_hint="[status|show <skill>|undo <skill>|ok|fail [note]|runs|evolve]",
+                         description="Evidence-gated skill evolution: status, show/undo a change, grade the last turn")
+    # The agent is the UI: it can answer "what changed?", revert on request, and record verdicts.
+    try:
+        ctx.register_tool(name="skillhex", toolset="skillhex", schema=_TOOL_SCHEMA, handler=_tool, emoji="🧬",
+                          description=_TOOL_SCHEMA["description"])
+    except Exception:  # noqa: BLE001
+        log.debug("skillhex: tool registration unavailable", exc_info=True)
+    try:
+        ctx.register_system_prompt_section("skillhex.changes", _prompt_section, max_chars=3000)
+    except Exception:  # noqa: BLE001
+        log.debug("skillhex: prompt section registration unavailable", exc_info=True)
+    try:
+        ctx.register_skill("guide", Path(__file__).resolve().parent / "skills" / "guide" / "SKILL.md",
+                           description="How skillhex works and how to inspect, undo, or grade its changes")
+    except Exception:  # noqa: BLE001
+        log.debug("skillhex: skill registration unavailable", exc_info=True)
     # Model routing uses Hermes's own auxiliary-task convention: both tasks appear in `hermes model`
     # under "Auxiliary models" and live at auxiliary.skillhex_reflector / auxiliary.skillhex_executor.
     # Blank = the main model. Set the reflector to a stronger tier (Sonnet acts, Opus reviews) or the

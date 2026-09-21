@@ -21,7 +21,7 @@ class FakeCtx:
     def __init__(self, config=None, llm=None):
         self.config = dict(config or {})
         self.llm = llm or FakeLLM()
-        self.hooks, self.commands, self.cli, self.aux_tasks, self.sections, self.skills = {}, {}, {}, {}, {}, {}
+        self.hooks, self.commands, self.cli, self.aux_tasks, self.sections, self.skills, self.tools = {}, {}, {}, {}, {}, {}, {}
 
     def get_config(self, key, default=None):
         return self.config.get(key, default)
@@ -34,6 +34,10 @@ class FakeCtx:
 
     def register_cli_command(self, name, help="", setup_fn=None, handler_fn=None, **kw):
         self.cli[name] = (setup_fn, handler_fn)
+
+    def register_tool(self, name, toolset, schema, handler, **kw):
+        assert schema["name"] == name and "parameters" in schema
+        self.tools[name] = handler
 
     def register_auxiliary_task(self, key, *, display_name, description, defaults=None):
         self.aux_tasks[key] = {"display_name": display_name, "description": description, "defaults": defaults or {}}

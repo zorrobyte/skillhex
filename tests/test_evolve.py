@@ -140,3 +140,14 @@ def test_write_approval_on_stages_the_patch_instead_of_writing_it(tmp_path):
     assert rec["payload"]["action"] == "edit" and rec["payload"]["name"] == "weather"
     assert "open-meteo" in rec["payload"]["content"]
     assert rec["id"] in res["applied"] and "staged" in res["applied"]
+
+
+def test_evolve_records_the_change_and_writes_an_html_report(tmp_path):
+    from skillhex.changes import ChangeLog
+    home, hh = setup_home(tmp_path)
+    res = evolve_skill(home, hh, "weather", budget=5, llm=NoLLM(), executor=FakeExecutor(),
+                       reflector=ScriptedReflector(), verifier=ScriptedVerifier())
+    assert (Path(res["run"]) / "report.html").exists() and (Path(res["run"]) / "artifacts.json").exists()
+    rec = ChangeLog(home / "changes.jsonl").recent()[0]
+    assert rec["skill"] == "weather" and rec["kind"] == "applied" and rec["run"] == res["run"]
+    assert res["html"] == str(Path(res["run"]) / "report.html")

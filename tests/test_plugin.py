@@ -89,3 +89,56 @@ def test_bank_similarity_and_snapshot_limit_settings(tmp_path, monkeypatch):
     (ws / "big.txt").write_text("more than one byte")
     monkeypatch.chdir(ws)
     assert mod._snapshot_for("sid") is None
+
+
+# ---------------------------------------------------------------- UI: prompt section, slash, tool, skill
+def _record_change(mod, skill="notes", kind="applied"):
+    from skillhex.changes import ChangeLog
+    ChangeLog(mod._home / "changes.jsonl").append(skill=skill, kind=kind, decision="apply (official pass)", run="runs/x",
+                                                   score=1.0, official=1)
+
+
+def test_prompt_section_is_empty_until_something_changed_then_names_the_skill(tmp_path):
+    mod, ctx, hh = load_plugin(tmp_path)
+    section = ctx.sections["skillhex.changes"]
+    assert section({"session_id": "s"}) == ""
+    _record_change(mod)
+    text = section({"session_id": "s"})
+    assert "notes" in text and "undo" in text.lower()
+
+
+def test_slash_status_show_runs_and_undo(tmp_path):
+    mod, ctx, hh = load_plugin(tmp_path)
+    d = _skill_with_backup(hh)
+    _record_change(mod)
+    cmd = ctx.commands["skillhex"]
+    status = cmd("")
+    assert "notes" in status and "applied" in status
+    shown = cmd("show notes")
+    assert "-original" in shown and "+patched" in shown
+    assert "no runs" in cmd("runs").lower()
+    out = cmd("undo notes")
+    assert "restored" in out.lower() and (d / "SKILL.md").read_text().endswith("original")
+    assert "nothing to undo" in cmd("undo notes").lower()
+    from skillhex.changes import ChangeLog
+    assert ChangeLog(mod._home / "changes.jsonl").recent()[0]["kind"] == "undone"
+
+
+def test_agent_tool_can_report_show_undo_and_mark(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    mod, ctx, hh = load_plugin(tmp_path, config={"classify_followups": False})
+    tool = ctx.tools["skillhex"]
+    d = _skill_with_backup(hh)
+    _record_change(mod)
+    assert "notes" in tool({"action": "status"})
+    assert "+patched" in tool({"action": "show", "skill": "notes"})
+    assert "restored" in tool({"action": "undo", "skill": "notes"}).lower()
+    skill_turn(mod, ctx, "s1")
+    assert "fail" in tool({"action": "mark", "verdict": "fail", "note": "wrong count"})
+    assert [e.outcome for e in mod._store.list("notes")] == ["fail"]
+    assert "unknown action" in tool({"action": "explode"}).lower()
+
+
+def test_bundled_guide_skill_is_registered(tmp_path):
+    mod, ctx, hh = load_plugin(tmp_path)
+    assert "guide" in ctx.skills and ctx.skills["guide"].read_text().startswith("---\nname: skillhex-guide")
