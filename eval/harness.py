@@ -95,9 +95,18 @@ def make_home(base_profile: Path, dest: Path, fixture: Fixture) -> Path:
     if dest.exists():
         shutil.rmtree(dest)
     dest.mkdir(parents=True)
-    for name in ("config.yaml", ".env"):
-        if (base_profile / name).exists():
-            shutil.copy2(base_profile / name, dest / name)
+    if (base_profile / ".env").exists():
+        shutil.copy2(base_profile / ".env", dest / ".env")
+    cfg: Dict[str, Any] = {}
+    if (base_profile / "config.yaml").exists():
+        import yaml
+        cfg = yaml.safe_load((base_profile / "config.yaml").read_text()) or {}
+    # the evaluation measures automatic application; a staging gate in the base profile would hide it
+    cfg.setdefault("skills", {})["write_approval"] = False
+    cfg.setdefault("auxiliary", {}).setdefault("background_review", {})["enabled"] = False
+    cfg.setdefault("curator", {})["enabled"] = False
+    import yaml
+    (dest / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False))
     plug = base_profile / "plugins" / "skillhex"
     if plug.exists():
         (dest / "plugins").mkdir()
@@ -112,6 +121,7 @@ def run_fixture(fixture: Fixture, base_profile: Path, out_root: Path, n: int = 2
     from skillhex.evolve import evolve_skill, resolve_executor_model
     from skillhex.executors.hermes import HermesExecutor
 
+    out_root = Path(out_root).resolve()
     hh = make_home(base_profile, out_root / "homes" / fixture.name, fixture)
     home = out_root / "skillhex" / fixture.name
     home.mkdir(parents=True, exist_ok=True)

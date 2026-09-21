@@ -50,3 +50,17 @@ def test_render_table_and_summary(tmp_path):
     md = harness.render_table(rows)
     assert "| a |" in md and "0/2" in md and "2/2" in md and "keep original" in md
     assert "mean pass rate" in md and "before 0%" in md and "after 50%" in md
+
+
+def test_make_home_copies_profile_and_forces_auto_apply(tmp_path):
+    import yaml
+    base = tmp_path / "base"
+    base.mkdir()
+    (base / "config.yaml").write_text("model:\n  default: m\nskills:\n  write_approval: true\n")
+    (base / ".env").write_text("OPENAI_API_KEY=k\n")
+    fx = harness.load_fixtures(ROOT / "eval" / "fixtures")[0]
+    hh = harness.make_home(base, tmp_path / "home", fx)
+    cfg = yaml.safe_load((hh / "config.yaml").read_text())
+    assert cfg["model"]["default"] == "m" and cfg["skills"]["write_approval"] is False
+    assert (hh / ".env").read_text() == "OPENAI_API_KEY=k\n"
+    assert (hh / "skills" / fx.skill / "SKILL.md").read_text() == fx.skill_md.read_text()

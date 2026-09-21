@@ -76,3 +76,12 @@ def test_prepare_writes_an_executor_api_key_into_the_scratch_env_not_the_config(
     assert "OPENAI_API_KEY=exec-secret" in env and "OPENAI_API_KEY=k" not in env
     cfg = yaml.safe_load((paths["home"] / "config.yaml").read_text())
     assert "api_key" not in cfg["model"]
+
+
+def test_relative_runs_dir_yields_absolute_attempt_paths(tmp_path, monkeypatch):
+    hh = make_home(tmp_path)
+    monkeypatch.chdir(tmp_path)
+    ex = HermesExecutor(hh, "notes-cli", "rel-runs")
+    paths = ex._prepare("---\nname: notes-cli\n---\nx", "v1", Task(id="t", skill="notes-cli", prompt="p", cwd=None))
+    assert paths["workspace"].is_absolute() and paths["attempt"].is_absolute()
+    assert str(paths["attempt"]).startswith(str(tmp_path.resolve()))

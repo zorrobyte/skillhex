@@ -82,7 +82,7 @@ class HermesExecutor:
                  python: Optional[str] = None, root_episode: Optional[Episode] = None):
         self.hermes_home = Path(hermes_home).expanduser()
         self.skill = skill
-        self.runs_dir = Path(runs_dir)
+        self.runs_dir = Path(runs_dir).expanduser().resolve()   # attempts run with cwd=workspace; paths must survive that
         self.hermes_bin = hermes_bin or find_hermes_bin()
         self.replay_episode_dir = Path(replay_episode_dir) if replay_episode_dir else None
         self.replay_mode = replay_mode
