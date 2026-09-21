@@ -55,16 +55,18 @@ skillhex/                core, host-agnostic, stdlib only
   outcome.py             follow-up classification (user's next message → pass/fail/unknown)
   evolve.py              runner: grade → search → gate → apply → report
   executors/hermes.py    fresh Hermes profile per attempt
-hermes_plugin/skillhex/  the Hermes plugin (plugin.yaml + register())
+plugin.yaml, __init__.py  the Hermes plugin entry (repo root is the plugin)
 fixtures/notes/          deterministic fixture: a notes CLI, a poisoned skill, a checker
 tests/                   pytest, no network, no LLM
 ```
 
 ## Hermes plugin
 
+The repository root is the plugin (`plugin.yaml` + `__init__.py` beside the `skillhex/` package):
+
 ```bash
-pip install -e .                                          # into the Hermes venv
-ln -s $PWD/hermes_plugin/skillhex ~/.hermes/plugins/skillhex
+hermes plugins install <owner>/skillhex        # or: git clone ... ~/.hermes/plugins/skillhex
+hermes plugins enable skillhex
 # config.yaml
 plugins:
   enabled: [skillhex]

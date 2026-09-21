@@ -14,6 +14,13 @@ can be rolled back.
 """
 from __future__ import annotations
 
+import sys as _sys
+from pathlib import Path as _Path
+
+_ROOT = str(_Path(__file__).resolve().parent)
+if _ROOT not in _sys.path:          # the plugin ships the core package beside it
+    _sys.path.insert(0, _ROOT)
+
 import hashlib
 import json
 import re

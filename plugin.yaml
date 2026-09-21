@@ -11,8 +11,6 @@ provides_hooks:
   - post_llm_call
   - on_session_end
 provides_tools: []
-python_dependencies:
-  - "skillhex>=0.1,<1"
 config_schema:
   auto_evolve:
     type: bool
