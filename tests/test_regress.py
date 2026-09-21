@@ -62,3 +62,17 @@ def test_absorb_keeps_only_listed_tests(tmp_path):
     sb = SkillBank(tmp_path / "banks", "notes-cli")
     sb.absorb(run_bank, task_prompt="p", run="r", keep={"t_good"})
     assert [c.id for c in sb.bank.list()] == ["t_good"]
+
+
+def test_rollback_records_a_ledger_mutation_when_the_ledger_is_available(tmp_path, monkeypatch):
+    from skillhex.regress import rollback_skill
+    d = tmp_path / "hh" / "skills" / "notes"
+    d.mkdir(parents=True)
+    (d / "SKILL.md").write_text("patched")
+    (d / "SKILL.md.skillhex-prev").write_text("orig")
+    calls = []
+    import tools.skill_ledger as ledger
+    monkeypatch.setattr(ledger, "record_mutation", lambda *a, **k: calls.append((a, k)))
+    monkeypatch.setattr(ledger, "capture_before", lambda *a, **k: "before", raising=False)
+    assert rollback_skill(tmp_path / "hh", "notes")
+    assert (d / "SKILL.md").read_text() == "orig" and calls and calls[0][0][0] == "patch"

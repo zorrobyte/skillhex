@@ -1,3 +1,4 @@
+import os
 import json
 import sys
 from pathlib import Path
@@ -64,3 +65,51 @@ def test_make_home_copies_profile_and_forces_auto_apply(tmp_path):
     assert cfg["model"]["default"] == "m" and cfg["skills"]["write_approval"] is False
     assert (hh / ".env").read_text() == "OPENAI_API_KEY=k\n"
     assert (hh / "skills" / fx.skill / "SKILL.md").read_text() == fx.skill_md.read_text()
+
+
+def test_version_bump_checker_requires_the_package_json_edit(tmp_path):
+    import subprocess, sys, shutil
+    fx = ROOT / "eval" / "fixtures" / "version-bump"
+    ws = tmp_path / "ws"
+    shutil.copytree(fx / "workspace", ws)
+    (ws / "answer.txt").write_text("1.4.10\n")
+    rc = subprocess.run([sys.executable, str(fx / "checker.py")], env={**os.environ, "SKILLHEX_WORKSPACE": str(ws)}).returncode
+    assert rc == 1, "answer.txt right but package.json untouched must fail"
+    (ws / "package.json").write_text((ws / "package.json").read_text().replace("1.4.9", "1.4.10"))
+    assert subprocess.run([sys.executable, str(fx / "checker.py")], env={**os.environ, "SKILLHEX_WORKSPACE": str(ws)}).returncode == 0
+
+
+def test_make_home_marks_the_fixture_skill_as_agent_created(tmp_path):
+    base = tmp_path / "base"
+    base.mkdir()
+    (base / "config.yaml").write_text("model:\n  default: m\n")
+    fx = harness.load_fixtures(ROOT / "eval" / "fixtures")[0]
+    hh = harness.make_home(base, tmp_path / "home", fx)
+    usage = json.loads((hh / "skills" / ".usage.json").read_text())
+    assert usage[fx.skill]["created_by"] == "agent"
+
+
+def test_fixtures_carry_a_heldout_variant_with_its_own_expected_value():
+    for f in harness.load_fixtures(ROOT / "eval" / "fixtures"):
+        assert f.heldout_workspace is not None and f.heldout_workspace.is_dir(), f.name
+        assert f.heldout_expected and f.heldout_expected != f.expected, f.name
+
+
+def test_heldout_task_points_the_checker_at_the_variant_answer():
+    f = [x for x in harness.load_fixtures(ROOT / "eval" / "fixtures") if x.name == "config-units"][0]
+    t = harness.heldout_task(f)
+    assert t.cwd == str(f.heldout_workspace) and t.meta["expected"] == f.heldout_expected and t.meta["checker"] == str(f.checker)
+
+
+def test_checkers_honour_an_expected_override(tmp_path):
+    import subprocess, sys, shutil
+    for f in harness.load_fixtures(ROOT / "eval" / "fixtures"):
+        ws = tmp_path / f.name
+        shutil.copytree(f.heldout_workspace, ws)
+        (ws / "answer.txt").write_text(f.heldout_expected + "\n")
+        if f.name == "version-bump":
+            (ws / "package.json").write_text((ws / "package.json").read_text().replace('"2.0.9"', '"2.0.10"'))
+        env = {**os.environ, "SKILLHEX_WORKSPACE": str(ws), "SKILLHEX_EXPECTED": f.heldout_expected}
+        assert subprocess.run([sys.executable, str(f.checker)], env=env, capture_output=True).returncode == 0, f.name
+        env["SKILLHEX_EXPECTED"] = f.expected
+        assert subprocess.run([sys.executable, str(f.checker)], env=env, capture_output=True).returncode == 1, f.name

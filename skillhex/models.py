@@ -44,6 +44,7 @@ class Episode:
     cwd: Optional[str] = None
     workspace_snapshot: Optional[str] = None
     evolved_run: Optional[str] = None   # set once an evolution run has consumed this failure
+    prompt: Optional[str] = None        # this turn's user message (history may hold earlier turns)
     created_at: float = field(default_factory=time.time)
 
     def to_dict(self) -> Dict[str, Any]:
@@ -57,7 +58,9 @@ class Episode:
 
     @property
     def user_prompt(self) -> str:
-        for m in self.messages:
+        if self.prompt:
+            return self.prompt
+        for m in reversed(self.messages):   # the turn's request is the LAST user message, not the first
             if m.get("role") == "user":
                 c = m.get("content")
                 if isinstance(c, list):

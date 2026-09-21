@@ -50,6 +50,10 @@ config_schema:
     type: int
     default: 52428800
     description: "Skip the working-directory snapshot (taken when a skill loads, so evaluation starts from the pre-attempt state) above this size."
+  apply_to_user_skills:
+    type: bool
+    default: false
+    description: "Also rewrite skills Hermes treats as user-owned (not created by the agent, `hermes curator adopt` not run). Default: stage those for /skills approve instead."
   changes_window_days:
     type: float
     default: 7

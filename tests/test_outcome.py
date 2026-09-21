@@ -34,3 +34,11 @@ def test_heuristic_detects_corrections_and_thanks():
     assert heuristic_followup("No, that's not right") == "fail"
     assert heuristic_followup("thanks, perfect") == "pass"
     assert heuristic_followup("what about tomorrow?") == "unknown"
+
+
+def test_heuristic_does_not_take_bare_keywords_as_verdicts():
+    from skillhex.outcome import heuristic_followup
+    assert heuristic_followup("Now explain error handling in Python") == "unknown"
+    assert heuristic_followup("Thanks, but the count is off by two") != "pass"
+    assert heuristic_followup("no, that's wrong, it's 7") == "fail"
+    assert heuristic_followup("perfect, thanks") == "pass"

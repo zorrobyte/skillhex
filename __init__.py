@@ -148,10 +148,13 @@ def _snapshot_for(session_id: str) -> Optional[str]:
 # ---------------------------------------------------------------------------- hooks
 def _on_skill_lifecycle(action: str = "", skill_name: str = "", session_id: str = "", task_id: str = "", **kw):
     if action == "loaded" and skill_name:
-        _recorder.skill_loaded(session_id or "", skill_name, task_id or None)
+        # skills.auto_load / slash-loaded skills fire with no session id and only a task id
+        # (agent/skill_commands.py); bucket by task id and join at turn end.
+        key = session_id or (f"task:{task_id}" if task_id else "")
+        _recorder.skill_loaded(key, skill_name, task_id or None)
         if _sessions is not None and session_id:
             _sessions.add_skill(session_id, skill_name)
-        _snapshot_for(session_id or "_")
+        _snapshot_for(key or "_")
 
 
 def _on_post_tool_call(tool_name: str = "", args: Any = None, result: Any = None, session_id: str = "",
@@ -225,19 +228,26 @@ def _on_fail(last: Dict[str, Any], note: str) -> None:
 
 
 def _on_post_llm_call(session_id: str = "", turn_id: str = "", conversation_history: Any = None,
-                      assistant_response: Any = None, user_message: Any = None, model: str = "", **kw):
+                      assistant_response: Any = None, user_message: Any = None, model: str = "", task_id: str = "", **kw):
     force = os.environ.get("SKILLHEX_FORCE_SKILL") or None
-    if _sessions is not None and session_id:
-        for name in _sessions.skills(session_id):
-            _recorder.skill_loaded(session_id, name)
+    sid = session_id or ""
+    if task_id:
+        _recorder.merge(f"task:{task_id}", sid)
+        if f"task:{task_id}" in _snapshots and sid not in _snapshots:
+            _snapshots[sid] = _snapshots.pop(f"task:{task_id}")
+    # Blame only skills loaded this turn. A turn that loaded nothing new is attributed to the most recently
+    # loaded skill of the session (still in the model's context), never to every skill ever seen.
+    fallback = _sessions.skills(sid)[-1:] if (_sessions is not None and sid) else []
     messages = list(conversation_history or [])
-    eps = _recorder.finish_turn(session_id or "", turn_id or None, messages, model, os.getcwd(), force_skill=force)
+    eps = _recorder.finish_turn(sid, turn_id or None, messages, model, os.getcwd(), force_skill=force,
+                                prompt=_user_text(user_message) or None, fallback_skills=fallback if messages else None)
+    snap = _snapshots.pop(sid or "_", None)     # per turn: the next skill load re-snapshots
     if not eps:
         return None
     saved = []
     for ep in eps:
         ep.skill_version = _skill_version(ep.skill)
-        ep.workspace_snapshot = _snapshots.get(session_id or "_")
+        ep.workspace_snapshot = snap
         try:
             _store.save(ep)
             saved.append((ep.skill, ep.id))
@@ -278,19 +288,37 @@ def _maybe_schedule_evolution(skills: Optional[list]) -> None:
     if not pending:
         return
     lock = _home / "evolve.lock"
-    if lock.exists() and time.time() - lock.stat().st_mtime < 3600:
+    if _lock_is_live(lock):
         return
-    lock.write_text(str(os.getpid()))
     cmd = [sys.executable, "-m", "skillhex.evolve", "--home", str(_home), "--hermes-home", str(_hermes_home), "--auto",
            "--min-score", str(_cfg("min_score_to_apply", 0.8)), "--replay-mode", str(_cfg("replay_mode", "permissive")),
-           "--budget", str(int(_cfg("budget", 5)))]
+           "--budget", str(int(_cfg("budget", 5)))] + (["--apply-to-user-skills"] if _cfg("apply_to_user_skills", False) else [])
     logf = open(_home / "evolve.log", "a")
+    # Hermes installs a plugin's declared deps, never the plugin package itself: put the plugin root on
+    # PYTHONPATH so `python -m skillhex.evolve` resolves without a pip install.
+    env = dict(os.environ)
+    env["PYTHONPATH"] = _ROOT + (os.pathsep + env["PYTHONPATH"] if env.get("PYTHONPATH") else "")
+    env["HERMES_HOME"] = str(_hermes_home)
     try:
-        subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT, start_new_session=True, cwd=str(_home))
-        log.info("skillhex: evolution scheduled for %s", pending)
+        proc = subprocess.Popen(cmd, stdout=logf, stderr=subprocess.STDOUT, start_new_session=True, cwd=str(_home), env=env)
+        lock.write_text(str(proc.pid))
+        log.info("skillhex: evolution scheduled for %s (pid %s)", pending, proc.pid)
     except Exception:  # noqa: BLE001
         lock.unlink(missing_ok=True)
         log.warning("skillhex: could not start evolution", exc_info=True)
+
+
+def _lock_is_live(lock: Path) -> bool:
+    """A lock only counts if the worker whose pid it names is still running."""
+    if not lock.exists():
+        return False
+    try:
+        pid = int(lock.read_text().strip() or 0)
+        os.kill(pid, 0)
+        return True
+    except (ValueError, ProcessLookupError, PermissionError):
+        lock.unlink(missing_ok=True)
+        return False
 
 
 # ---------------------------------------------------------------------------- commands / tool
@@ -377,8 +405,11 @@ def _runs_text() -> str:
                      for r in runs[-20:])
 
 
-def _mark(verdict: str, note: str = "") -> str:
-    sid, last = _sessions.most_recent() if _sessions else (None, None)
+def _mark(verdict: str, note: str = "", session_id: Optional[str] = None) -> str:
+    if session_id and _sessions is not None and _sessions.last(session_id):
+        sid, last = session_id, _sessions.last(session_id)
+    else:
+        sid, last = _sessions.most_recent() if _sessions else (None, None)
     if not last:
         return "skillhex: no skill-guided turn to mark"
     marked = []
@@ -440,6 +471,7 @@ _TOOL_SCHEMA = {
 
 def _tool(args: Dict[str, Any], **kw) -> str:
     a = str((args or {}).get("action") or "").lower()
+    session_id = str(kw.get("session_id") or "")   # Hermes passes the invoking session to tool handlers
     skill = str((args or {}).get("skill") or "")
     if a == "status":
         return _status()
@@ -451,7 +483,7 @@ def _tool(args: Dict[str, Any], **kw) -> str:
         v = str((args or {}).get("verdict") or "").lower()
         if v not in ("ok", "fail"):
             return "skillhex: verdict must be ok or fail"
-        return _mark(v, str((args or {}).get("note") or ""))
+        return _mark(v, str((args or {}).get("note") or ""), session_id=session_id or None)
     if a == "runs":
         return _runs_text()
     return f"skillhex: unknown action {a!r} (status|show|undo|mark|runs)"
@@ -472,7 +504,8 @@ def _cli_handler(args) -> int:
     if getattr(args, "budget", None) is None:
         args.budget = int(_cfg("budget", 5))
     return cli_entry(args, home=_home, hermes_home=_hermes_home,
-                     min_score=float(_cfg("min_score_to_apply", 0.8)), replay_mode=str(_cfg("replay_mode", "permissive")))
+                     min_score=float(_cfg("min_score_to_apply", 0.8)), replay_mode=str(_cfg("replay_mode", "permissive")),
+                     apply_to_user_skills=bool(_cfg("apply_to_user_skills", False)))
 
 
 # ---------------------------------------------------------------------------- register

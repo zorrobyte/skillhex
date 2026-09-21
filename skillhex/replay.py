@@ -9,7 +9,7 @@ from .models import Episode
 
 READ_ONLY_TOOLS = {
     "read_file", "search_files", "skills_list", "skill_view", "web_search", "web_extract", "web_fetch",
-    "memory", "session_search", "todo", "vision_analyze", "skillhex_status",
+    "session_search", "vision_analyze", "skillhex_status",   # memory/todo write; not read-only
 }
 
 

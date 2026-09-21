@@ -73,7 +73,12 @@ class TestBank:
         shutil.rmtree(self.dir(test_id), ignore_errors=True)
 
     def _execute(self, script_path: Path, episode_dir: Path) -> Tuple[Optional[int], str]:
-        env = {"SKILLHEX_EPISODE": str(episode_dir), "PATH": "/usr/bin:/bin:/usr/local/bin", "HOME": str(Path.home())}
+        # Reviewer-written code runs here. No inherited environment, no real HOME: a throwaway one under the
+        # bank, so a test cannot read dotfiles or credentials by accident. (Not a sandbox; see README.)
+        fake_home = self.root / ".home"
+        fake_home.mkdir(parents=True, exist_ok=True)
+        env = {"SKILLHEX_EPISODE": str(episode_dir), "PATH": "/usr/bin:/bin:/usr/local/bin", "HOME": str(fake_home),
+               "PYTHONDONTWRITEBYTECODE": "1"}
         try:
             proc = subprocess.run([self.python, str(Path(script_path).resolve())], capture_output=True, text=True,
                                   timeout=self.timeout, cwd=str(Path(episode_dir).resolve()), env=env)
@@ -87,6 +92,9 @@ class TestBank:
         if verdict not in ("PASS", "FAIL"):
             return None, f"unrecognised result {verdict!r}"
         return (1 if verdict == "PASS" else 0), out
+
+    def run_capture(self, test_id: str, episode_dir: Path | str) -> str:
+        return self._execute(self.dir(test_id) / "test.py", Path(episode_dir))[1]
 
     def run(self, test_id: str, episode_dir: Path | str) -> int:
         """phi(c_j, Y_v): 1 pass, 0 fail. Timeouts and malformed output count as fail."""

@@ -5,9 +5,13 @@ from __future__ import annotations
 import re
 from typing import Tuple
 
-_FAIL = re.compile(r"\b(wrong|incorrect|not right|that's not|thats not|didn'?t work|doesn'?t work|not what i|try again|"
-                   r"still (broken|wrong|not)|no[,.!]|nope|you missed|failed|error|isn'?t right|fix (it|this))\b", re.I)
-_PASS = re.compile(r"\b(thanks|thank you|thx|perfect|great|nice|awesome|works|that'?s (it|right|correct)|looks good|lgtm)\b", re.I)
+# Phrases only: a bare "error", "failed" or "no" is a topic word as often as a verdict.
+_FAIL = re.compile(r"(\b(that'?s|thats|this is|it'?s|its) (wrong|incorrect|not right|not it)\b|\bnot what i (asked|wanted|meant)\b|"
+                   r"\b(didn'?t|doesn'?t|does not|did not) work\b|\btry again\b|\bstill (broken|wrong|not working)\b|"
+                   r"\byou (missed|forgot|got it wrong)\b|\bisn'?t right\b|\bfix (it|this|that)\b|\boff by\b|"
+                   r"^\s*(no|nope|wrong|incorrect)\b[,.!: ]|\bthat is (wrong|incorrect)\b)", re.I)
+_PASS = re.compile(r"\b(thanks|thank you|thx|perfect|great|nice|awesome|that works|works now|that'?s (it|right|correct)|looks good|lgtm)\b", re.I)
+_HEDGE = re.compile(r"\b(but|however|although|except|not quite|almost)\b", re.I)
 
 SYSTEM = ("You classify whether a user's follow-up message indicates that the assistant's previous answer FAILED "
           "the user's intent (wrong, incomplete, needed redoing) or SUCCEEDED, or gives no signal. "
@@ -19,7 +23,7 @@ def heuristic_followup(text: str) -> str:
     t = (text or "").strip()
     if _FAIL.search(t):
         return "fail"
-    if len(t) <= 80 and _PASS.search(t):
+    if len(t) <= 80 and _PASS.search(t) and not _HEDGE.search(t):
         return "pass"
     return "unknown"
 

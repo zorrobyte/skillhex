@@ -85,3 +85,51 @@ def test_relative_runs_dir_yields_absolute_attempt_paths(tmp_path, monkeypatch):
     paths = ex._prepare("---\nname: notes-cli\n---\nx", "v1", Task(id="t", skill="notes-cli", prompt="p", cwd=None))
     assert paths["workspace"].is_absolute() and paths["attempt"].is_absolute()
     assert str(paths["attempt"]).startswith(str(tmp_path.resolve()))
+
+
+def test_attempt_env_is_scrubbed_of_inherited_secrets(tmp_path, monkeypatch):
+    hh = make_home(tmp_path)
+    monkeypatch.setenv("SOME_VENDOR_API_KEY", "leak")
+    monkeypatch.setenv("GITHUB_TOKEN", "leak")
+    monkeypatch.setenv("HARMLESS", "keep")
+    ex = HermesExecutor(hh, "notes-cli", tmp_path / "runs")
+    env = ex._attempt_env({"home": tmp_path / "h", "capture": tmp_path / "c"})
+    assert "SOME_VENDOR_API_KEY" not in env and "GITHUB_TOKEN" not in env and env["HARMLESS"] == "keep"
+    assert env["HERMES_HOME"] == str(tmp_path / "h")
+
+
+def test_prepare_symlinks_every_base_plugin_and_copies_auth(tmp_path):
+    hh = make_home(tmp_path)
+    (hh / "plugins" / "muse-code-subscription").mkdir(parents=True)
+    (hh / "plugins" / "muse-code-subscription" / "plugin.yaml").write_text("name: muse-code-subscription\n")
+    (hh / "auth.json").write_text('{"providers": []}')
+    ex = HermesExecutor(hh, "notes-cli", tmp_path / "runs")
+    paths = ex._prepare("---\nname: notes-cli\n---\nx", "v1", Task(id="t", skill="notes-cli", prompt="p", cwd=None))
+    assert (paths["home"] / "plugins" / "muse-code-subscription").is_symlink()
+    assert (paths["home"] / "auth.json").read_text() == '{"providers": []}'
+
+
+def test_workspace_copy_does_not_follow_or_keep_symlinks(tmp_path):
+    hh = make_home(tmp_path)
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    (ws / "real.txt").write_text("x")
+    secret = tmp_path / "outside.txt"
+    secret.write_text("secret")
+    (ws / "link").symlink_to(secret)
+    ex = HermesExecutor(hh, "notes-cli", tmp_path / "runs")
+    paths = ex._prepare("---\nname: notes-cli\n---\nx", "v1", Task(id="t", skill="notes-cli", prompt="p", cwd=str(ws)))
+    assert (paths["workspace"] / "real.txt").exists() and not (paths["workspace"] / "link").exists()
+
+
+def test_check_passes_the_tasks_expected_value_to_the_checker(tmp_path):
+    hh = make_home(tmp_path)
+    checker = tmp_path / "checker.py"
+    checker.write_text("import os, sys\nsys.exit(0 if os.environ.get('SKILLHEX_EXPECTED') == '42' else 1)\n")
+    ex = HermesExecutor(hh, "notes-cli", tmp_path / "runs")
+    from skillhex.models import Episode
+    ws = tmp_path / "ws"
+    ws.mkdir()
+    ep = Episode(id="e", skill="notes-cli", skill_version="v", task_id="t")
+    assert ex._check(Task(id="t", skill="notes-cli", prompt="p", cwd=str(ws), meta={"checker": str(checker), "expected": "42"}), ep, ws, None) == 1
+    assert ex._check(Task(id="t", skill="notes-cli", prompt="p", cwd=str(ws), meta={"checker": str(checker)}), ep, ws, None) == 0

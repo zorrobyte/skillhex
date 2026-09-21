@@ -113,6 +113,8 @@ def make_home(base_profile: Path, dest: Path, fixture: Fixture) -> Path:
         os.symlink(plug.resolve(), dest / "plugins" / "skillhex")
     (dest / "skills" / fixture.skill).mkdir(parents=True)
     shutil.copy2(fixture.skill_md, dest / "skills" / fixture.skill / "SKILL.md")
+    # the premise is a skill the agent learned: mark it curator-managed so autonomous writes are allowed
+    (dest / "skills" / ".usage.json").write_text(json.dumps({fixture.skill: {"created_by": "agent"}}))
     return dest
 
 

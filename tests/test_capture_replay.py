@@ -78,3 +78,11 @@ def test_episode_ids_are_filesystem_safe():
     r.skill_loaded("s", "x")
     ep = r.finish_turn("s", turn_id="2026:abc/def", messages=[], model="m", cwd=None)[0]
     assert ":" not in ep.id and "/" not in ep.id
+
+
+def test_memory_tool_is_not_treated_as_read_only_in_strict_mode():
+    from skillhex.replay import ReplayPolicy, Cassette
+    from skillhex.models import Episode
+    pol = ReplayPolicy(Cassette(Episode(id="e", skill="s", skill_version="v", task_id="t")), mode="strict")
+    kind, _ = pol.decide("memory", {"action": "add", "content": "x"})
+    assert kind == "block"

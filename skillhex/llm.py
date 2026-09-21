@@ -68,6 +68,44 @@ def extract_json(text: str) -> Dict[str, Any]:
     raise LLMError(f"no JSON object in output: {text[:200]!r}")
 
 
+class HermesAuxLLM:
+    """The reviewer through Hermes's own auxiliary client: routed by task name (auxiliary.<task> in config,
+    editable under `hermes model`), authenticated however Hermes authenticates that provider (OAuth, a
+    subscription plugin, a pooled credential). Same interface as OpenAICompatLLM."""
+
+    def __init__(self, task: str = "skillhex_reflector", max_tokens: int = 16000, timeout: float = 300):
+        self.task, self.max_tokens, self.timeout = task, max_tokens, timeout
+        self.usage = {"prompt_tokens": 0, "completion_tokens": 0, "calls": 0}
+        self.cfg = LLMConfig(base_url=f"hermes://{task}", api_key="", model=task)
+
+    @staticmethod
+    def available() -> bool:
+        try:
+            import agent.auxiliary_client  # noqa: F401
+            return True
+        except Exception:  # noqa: BLE001
+            return False
+
+    def _post(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        from agent import auxiliary_client as aux
+        resp = aux.call_llm(task=self.task, messages=payload["messages"], max_tokens=payload.get("max_tokens"),
+                            temperature=payload.get("temperature"), timeout=self.timeout)
+        text = ""
+        try:
+            text = aux.extract_content_or_reasoning(resp) or ""
+        except Exception:  # noqa: BLE001
+            try:
+                text = resp.choices[0].message.content or ""
+            except Exception:  # noqa: BLE001
+                text = str(resp)
+        u = getattr(resp, "usage", None)
+        usage = {"prompt_tokens": getattr(u, "prompt_tokens", 0) or 0, "completion_tokens": getattr(u, "completion_tokens", 0) or 0}
+        return {"choices": [{"message": {"content": text}}], "usage": usage}
+
+    complete = None  # bound below
+    complete_json = None
+
+
 class OpenAICompatLLM:
     def __init__(self, cfg: LLMConfig, post: Optional[Callable[[Dict[str, Any]], Dict[str, Any]]] = None):
         self.cfg = cfg
@@ -114,6 +152,10 @@ class OpenAICompatLLM:
             raise LLMError(f"unexpected response shape: {str(data)[:300]}") from e
 
     def complete_json(self, system: str, user: str, **kw) -> Dict[str, Any]:
+        return _complete_json(self, system, user, **kw)
+
+
+def _complete_json(self, system: str, user: str, **kw) -> Dict[str, Any]:
         text = self.complete(system, user, **kw)
         try:
             return extract_json(text)
@@ -125,3 +167,18 @@ class OpenAICompatLLM:
                 return extract_json(text2)
             except LLMError as second:
                 raise LLMError(f"malformed JSON twice: {first}; {second}") from second
+
+
+def _hermes_complete(self, system: str, user: str, extra_messages: Optional[list] = None,
+                     max_tokens: Optional[int] = None) -> str:
+    messages = [{"role": "system", "content": system}, {"role": "user", "content": user}] + (extra_messages or [])
+    data = self._post({"messages": messages, "temperature": 0.2, "max_tokens": max_tokens or self.max_tokens})
+    u = data.get("usage") or {}
+    self.usage["prompt_tokens"] += int(u.get("prompt_tokens", 0) or 0)
+    self.usage["completion_tokens"] += int(u.get("completion_tokens", 0) or 0)
+    self.usage["calls"] += 1
+    return data["choices"][0]["message"].get("content") or ""
+
+
+HermesAuxLLM.complete = _hermes_complete
+HermesAuxLLM.complete_json = _complete_json

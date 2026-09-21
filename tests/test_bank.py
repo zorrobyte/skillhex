@@ -1,3 +1,4 @@
+from pathlib import Path
 import textwrap
 
 from skillhex.bank import TestBank, TestCase, STRENGTHS
@@ -99,3 +100,17 @@ def test_bank_with_relative_root_still_runs_scripts(tmp_path, monkeypatch):
     assert ok, msg
     bank.add(case("t_rel", script=PASS_SCRIPT))
     assert bank.run("t_rel", store.dir("s", "e1")) == 1
+
+
+def test_self_verifier_scripts_run_with_a_throwaway_home(tmp_path):
+    from skillhex.bank import TestBank, TestCase
+    bank = TestBank(tmp_path / "bank")
+    ep = tmp_path / "ep"
+    ep.mkdir()
+    (ep / "episode.json").write_text("{}")
+    case = TestCase(id="t_home", hypothesis_ids=["H1"], assertion_strength="diagnostic", summary="d",
+                    script="import os\nprint('HOME=' + os.environ['HOME'])\nprint('SELF_VERIFIER_RESULT=PASS')\n")
+    bank.add(case)
+    out = bank.run_capture(case.id, ep)
+    home_line = [l for l in out.splitlines() if l.startswith("HOME=")][0]
+    assert str(Path.home()) not in home_line and "SELF_VERIFIER_RESULT=PASS" in out

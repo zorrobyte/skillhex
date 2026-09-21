@@ -16,6 +16,7 @@ def setup_home(tmp_path, skill_text=FM + "skill: use wttr"):
     hh = tmp_path / "hermes"
     (hh / "skills" / "weather").mkdir(parents=True)
     (hh / "skills" / "weather" / "SKILL.md").write_text(skill_text)
+    (hh / "skills" / ".usage.json").write_text(json.dumps({"weather": {"created_by": "agent"}}))
     home = tmp_path / "skillhex"
     store = EpisodeStore(home / "episodes")
     ep = Episode(id="ep0", skill="weather", skill_version="x", task_id="t",
@@ -159,3 +160,55 @@ def test_cli_status_on_an_empty_profile_says_so(tmp_path, capsys):
     rc = cli_entry(types.SimpleNamespace(action="status", skill=None), home=tmp_path / "sx", hermes_home=tmp_path / "hh")
     out = capsys.readouterr().out
     assert rc == 0 and "no skill-guided turns captured yet" in out
+
+
+def _usage(hh, skill, created_by):
+    (hh / "skills").mkdir(exist_ok=True)
+    (hh / "skills" / ".usage.json").write_text(json.dumps({skill: {"created_by": created_by}}))
+
+
+def test_user_owned_skill_is_staged_not_written(tmp_path, monkeypatch):
+    """Hermes refuses autonomous edits to skills that are not curator-managed (created_by != agent),
+    pinned, bundled, hub-installed or external. skillhex stages those for approval instead."""
+    home, hh = setup_home(tmp_path)
+    monkeypatch.setenv("HERMES_HOME", str(hh))
+    _usage(hh, "weather", created_by=None)
+    res = evolve_skill(home, hh, "weather", budget=5, llm=NoLLM(), executor=FakeExecutor(),
+                       reflector=ScriptedReflector(), verifier=ScriptedVerifier())
+    assert res["decision"].startswith("apply") and "staged" in res["applied"] and "user-owned" in res["applied"]
+    assert (hh / "skills" / "weather" / "SKILL.md").read_text() == FM + "skill: use wttr"
+    assert list((hh / "pending" / "skills").glob("*.json"))
+
+
+def test_agent_created_skill_is_written(tmp_path, monkeypatch):
+    home, hh = setup_home(tmp_path)
+    monkeypatch.setenv("HERMES_HOME", str(hh))
+    _usage(hh, "weather", created_by="agent")
+    res = evolve_skill(home, hh, "weather", budget=5, llm=NoLLM(), executor=FakeExecutor(),
+                       reflector=ScriptedReflector(), verifier=ScriptedVerifier())
+    assert "open-meteo" in (hh / "skills" / "weather" / "SKILL.md").read_text() and "staged" not in res["applied"]
+
+
+def test_apply_to_user_skills_setting_overrides_the_ownership_guard(tmp_path, monkeypatch):
+    home, hh = setup_home(tmp_path)
+    monkeypatch.setenv("HERMES_HOME", str(hh))
+    _usage(hh, "weather", created_by=None)
+    res = evolve_skill(home, hh, "weather", budget=5, llm=NoLLM(), executor=FakeExecutor(),
+                       reflector=ScriptedReflector(), verifier=ScriptedVerifier(), apply_to_user_skills=True)
+    assert "open-meteo" in (hh / "skills" / "weather" / "SKILL.md").read_text()
+
+
+def test_skill_changed_during_the_run_is_staged_not_overwritten(tmp_path, monkeypatch):
+    home, hh = setup_home(tmp_path)
+    monkeypatch.setenv("HERMES_HOME", str(hh))
+    _usage(hh, "weather", created_by="agent")
+
+    class Editing(FakeExecutor):
+        def execute(self, content, task, node_id):
+            (hh / "skills" / "weather" / "SKILL.md").write_text(FM + "skill: user edited meanwhile")
+            return super().execute(content, task, node_id)
+
+    res = evolve_skill(home, hh, "weather", budget=5, llm=NoLLM(), executor=Editing(),
+                       reflector=ScriptedReflector(), verifier=ScriptedVerifier())
+    assert "staged" in res["applied"] and "changed" in res["applied"]
+    assert (hh / "skills" / "weather" / "SKILL.md").read_text() == FM + "skill: user edited meanwhile"

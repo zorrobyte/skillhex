@@ -45,16 +45,30 @@ class TurnRecorder:
             ToolCall(id=str(tool_call_id or uuid.uuid4().hex[:8]), name=str(name), args=dict(args or {}),
                      result=text, status=str(status or "ok"), duration_ms=duration_ms))
 
+    def merge(self, from_key: str, into: str) -> None:
+        """Fold a bucket keyed some other way (e.g. by task id, when the host fired a lifecycle event
+        without a session id) into the session's bucket."""
+        src = self._sessions.pop(from_key, None)
+        if src is None:
+            return
+        dst = self._state(into)
+        for s in src.skills:
+            if s not in dst.skills:
+                dst.skills.append(s)
+        dst.tool_calls.extend(src.tool_calls)
+        dst.task_id = dst.task_id or src.task_id
+
     def finish_turn(self, session_id: str, turn_id: Optional[str], messages: List[Dict[str, Any]],
-                    model: Optional[str], cwd: Optional[str], force_skill: Optional[str] = None) -> List[Episode]:
+                    model: Optional[str], cwd: Optional[str], force_skill: Optional[str] = None,
+                    prompt: Optional[str] = None, fallback_skills: Optional[List[str]] = None) -> List[Episode]:
         st = self._sessions.pop(session_id or "_", None)
         if st is None:
             return []
-        skills = st.skills or ([force_skill] if force_skill else [])
+        skills = st.skills or ([force_skill] if force_skill else []) or list(fallback_skills or [])
         eps = []
         stamp = re.sub(r"[^A-Za-z0-9_.-]+", "-", turn_id or f"{int(time.time())}-{uuid.uuid4().hex[:6]}")[:80]
         for name in skills:
             eps.append(Episode(id=f"{stamp}-{uuid.uuid4().hex[:4]}", skill=name, skill_version="",
                                task_id=st.task_id or "", messages=list(messages), tool_calls=list(st.tool_calls),
-                               session_id=session_id, turn_id=turn_id, model=model, cwd=cwd))
+                               session_id=session_id, turn_id=turn_id, model=model, cwd=cwd, prompt=prompt or None))
         return eps

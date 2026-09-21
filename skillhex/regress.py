@@ -80,6 +80,20 @@ def rollback_skill(hermes_home: Path, skill: str) -> bool:
     prev = d / "SKILL.md.skillhex-prev"
     if not prev.exists():
         return False
+    before = None
+    ledger = None
+    try:
+        import os
+        os.environ.setdefault("HERMES_HOME", str(hermes_home))
+        from tools import skill_ledger as ledger  # type: ignore
+        before = ledger.capture_before(d, skill=skill) if hasattr(ledger, "capture_before") else None
+    except Exception:  # noqa: BLE001
+        ledger = None
     shutil.copy2(prev, d / "SKILL.md")
     prev.unlink()
+    try:
+        if ledger is not None and hasattr(ledger, "record_mutation"):
+            ledger.record_mutation("patch", skill, before=before, after_root=d, evidence={"skillhex": "rollback"})
+    except Exception:  # noqa: BLE001
+        pass
     return True

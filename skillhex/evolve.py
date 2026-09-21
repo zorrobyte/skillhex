@@ -18,7 +18,7 @@ from typing import Any, Dict, Optional
 
 from .episodes import EpisodeStore
 from .executors.hermes import HermesExecutor, find_skill_dir
-from .llm import OpenAICompatLLM, LLMConfig
+from .llm import OpenAICompatLLM, LLMConfig, HermesAuxLLM
 from .models import Episode
 from .reflect import LLMReflector
 from .regress import SkillBank
@@ -98,7 +98,20 @@ def resolve_reflector(hermes_home: Path) -> LLMConfig:
     return LLMConfig(base_url=str(base), api_key=str(key or ""), model=str(model), reasoning_effort=effort or None)
 
 
-def build_llm(hermes_home: Path, role: str = "reflector") -> OpenAICompatLLM:
+def build_llm(hermes_home: Path, role: str = "reflector"):
+    """Reviewer backend. An explicit custom endpoint (SKILLHEX_* env, or a base_url in the
+    auxiliary.skillhex_reflector block) uses the stdlib OpenAI-compatible client. Otherwise, when Hermes is
+    importable, route through Hermes's auxiliary client by task name so every provider Hermes can
+    authenticate works (subscription plugins, OAuth, pooled credentials). Last resort: the main model's
+    custom base_url."""
+    os.environ["HERMES_HOME"] = str(hermes_home)
+    env = _runtime_env(hermes_home)
+    cfg = _load_config(hermes_home)
+    aux = _aux_block(cfg, REFLECTOR_TASK, env)
+    if env.get("SKILLHEX_BASE_URL") or env.get("SKILLHEX_MODEL") or aux.get("base_url"):
+        return OpenAICompatLLM(resolve_reflector(hermes_home))
+    if HermesAuxLLM.available():
+        return HermesAuxLLM(task=REFLECTOR_TASK)
     return OpenAICompatLLM(resolve_reflector(hermes_home))
 
 
@@ -171,12 +184,61 @@ def _stage_skill(hermes_home: Path, skill: str, content: str, evidence: Dict[str
     return f"staged for approval (skills.write_approval is on): pending id {pid} -> /skills diff {pid} | /skills approve {pid}"
 
 
-def _apply_skill(hermes_home: Path, skill: str, content: str, evidence: Dict[str, Any]) -> str:
+def ownership_refusal(hermes_home: Path, skill: str, skill_dir: Optional[Path]) -> Optional[str]:
+    """Mirror Hermes's own rule for autonomous writes (tools/skill_manager_guards.py): pinned, external,
+    protected built-in, hub-installed, bundled, or not curator-managed (created_by != agent, i.e. user-owned)
+    skills are off-limits. Returns the reason, or None when the write is allowed. Unknown when Hermes is not
+    importable (nothing to check against)."""
+    os.environ["HERMES_HOME"] = str(hermes_home)
+    try:
+        from tools import skill_usage
+    except Exception:  # noqa: BLE001
+        return None
+    try:
+        rec = skill_usage.load_usage().get(skill)
+        if isinstance(rec, dict) and rec.get("pinned"):
+            return "pinned"
+        for pred, label in ((skill_usage.is_protected_builtin, "protected built-in"),
+                            (skill_usage.is_hub_installed, "hub-installed"), (skill_usage.is_bundled, "bundled")):
+            try:
+                if pred(skill):
+                    return label
+            except Exception:  # noqa: BLE001
+                continue
+        if skill_dir is not None:
+            try:
+                from agent.skill_utils import is_external_skill_path
+                if is_external_skill_path(skill_dir):
+                    return "external (skills.external_dirs)"
+            except Exception:  # noqa: BLE001
+                pass
+        if not skill_usage._is_curator_managed_record(rec):
+            return "user-owned (not curator-managed; `hermes curator adopt <skill>` opts it in)"
+    except Exception:  # noqa: BLE001
+        log.debug("ownership check failed", exc_info=True)
+        return "ownership could not be verified"
+    return None
+
+
+def _apply_skill(hermes_home: Path, skill: str, content: str, evidence: Dict[str, Any], *,
+                 expected_hash: Optional[str] = None, apply_to_user_skills: bool = False) -> str:
     """Write the winning SKILL.md into the profile, through the Hermes ledger when importable.
-    If the user gated skill writes, stage it for their approval instead."""
+    Stage for approval instead when: the user gated skill writes; the skill is one Hermes would refuse to
+    edit autonomously; or the file changed while the run was evaluating."""
     if write_approval_enabled(hermes_home):
         return _stage_skill(hermes_home, skill, content, evidence)
     src = find_skill_dir(skill, hermes_home)
+    if not apply_to_user_skills:
+        why = ownership_refusal(hermes_home, skill, src)
+        if why:
+            evidence["ownership"] = why
+            return _stage_skill(hermes_home, skill, content, evidence) + f" (not applied automatically: {why} skill)"
+    if expected_hash and src is not None and (src / "SKILL.md").exists():
+        import hashlib
+        now = hashlib.sha256((src / "SKILL.md").read_bytes()).hexdigest()
+        if now != expected_hash:
+            evidence["changed_during_run"] = True
+            return _stage_skill(hermes_home, skill, content, evidence) + " (not applied automatically: the skill changed during the run)"
     profile_dir = hermes_home / "skills" / skill
     if src is None or not str(src.resolve()).startswith(str(hermes_home.resolve())):
         # bundled or missing skill: materialise a profile-level override (profile skills win by name)
@@ -242,7 +304,7 @@ def evolve_skill(home: Path, hermes_home: Path, skill: str, *, episode: Optional
                  task_prompt: Optional[str] = None, checker: Optional[str] = None, cwd: Optional[str] = None,
                  budget: int = 5, min_score: float = 0.8, replay_mode: str = "permissive", apply: bool = True,
                  executor_model: Optional[Dict[str, Any]] = None, llm=None, executor=None,
-                 reflector=None, verifier=None) -> Dict[str, Any]:
+                 reflector=None, verifier=None, apply_to_user_skills: bool = False) -> Dict[str, Any]:
     store = EpisodeStore(home / "episodes")
     if episode is None and checker:
         _grade_pending_with_checker(store, skill, checker)
@@ -257,6 +319,8 @@ def evolve_skill(home: Path, hermes_home: Path, skill: str, *, episode: Optional
     if skill_dir is None:
         return {"skill": skill, "status": "skill_not_found"}
     initial = (skill_dir / "SKILL.md").read_text()
+    import hashlib
+    initial_hash = hashlib.sha256(initial.encode()).hexdigest()
     prompt = task_prompt or (episode.user_prompt if episode else "")
     task = Task(id=f"{skill}-{int(time.time())}", skill=skill, prompt=prompt, cwd=cwd or (episode.cwd if episode else None),
                 meta={"checker": checker} if checker else {})
@@ -296,7 +360,8 @@ def evolve_skill(home: Path, hermes_home: Path, skill: str, *, episode: Optional
     evidence = {"run": str(run_dir), "node": best.id if best else None, "score": best.score if best else None,
                 "official": best.reward if best else None, "decision": decision}
     if apply and decision.startswith("apply"):
-        applied = _apply_skill(hermes_home, skill, best.content, evidence)
+        applied = _apply_skill(hermes_home, skill, best.content, evidence, expected_hash=initial_hash,
+                               apply_to_user_skills=apply_to_user_skills)
         ChangeLog(home / "changes.jsonl").append(
             skill=skill, kind="staged" if applied.startswith("staged") else "applied", decision=decision, run=str(run_dir),
             score=best.score, official=best.reward, pending_id=evidence.get("pending_id"))
@@ -317,7 +382,8 @@ def evolve_skill(home: Path, hermes_home: Path, skill: str, *, episode: Optional
     return summary
 
 
-def cli_entry(args, home: Path, hermes_home: Path, min_score: float = 0.8, replay_mode: str = "permissive") -> int:
+def cli_entry(args, home: Path, hermes_home: Path, min_score: float = 0.8, replay_mode: str = "permissive",
+              apply_to_user_skills: bool = False) -> int:
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s", stream=sys.stderr)
     store = EpisodeStore(home / "episodes")
     action = getattr(args, "action", "status")
@@ -370,7 +436,8 @@ def cli_entry(args, home: Path, hermes_home: Path, min_score: float = 0.8, repla
             print("--skill required", file=sys.stderr)
             return 2
         res = evolve_skill(home, hermes_home, args.skill, task_prompt=args.task_prompt, checker=args.checker, cwd=args.cwd,
-                           budget=args.budget, min_score=min_score, replay_mode=replay_mode)
+                           budget=args.budget, min_score=min_score, replay_mode=replay_mode,
+                           apply_to_user_skills=apply_to_user_skills)
         print(json.dumps(res, indent=2))
         return 0
     return 1
@@ -389,6 +456,8 @@ def main(argv=None) -> int:
     ap.add_argument("--min-score", type=float, default=0.8)
     ap.add_argument("--replay-mode", default="permissive")
     ap.add_argument("--no-apply", action="store_true")
+    ap.add_argument("--apply-to-user-skills", action="store_true",
+                    help="also write skills Hermes treats as user-owned (default: stage them for approval)")
     a = ap.parse_args(argv)
     home, hh = Path(a.home), Path(a.hermes_home)
     logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s")
@@ -398,7 +467,8 @@ def main(argv=None) -> int:
         skills = [a.skill] if a.skill else store.pending_skills()
         for s in skills:
             res = evolve_skill(home, hh, s, task_prompt=a.task_prompt, checker=a.checker, cwd=a.cwd, budget=a.budget,
-                               min_score=a.min_score, replay_mode=a.replay_mode, apply=not a.no_apply)
+                               min_score=a.min_score, replay_mode=a.replay_mode, apply=not a.no_apply,
+                               apply_to_user_skills=a.apply_to_user_skills)
             print(json.dumps(res, indent=2))
     finally:
         lock.unlink(missing_ok=True)

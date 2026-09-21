@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -59,6 +60,23 @@ def find_skill_dir(skill: str, hermes_home: Path, extra_roots: Optional[List[Pat
             if f"name: {skill}\n" in head:
                 return md.parent
     return None
+
+
+_JUNK = shutil.ignore_patterns(".git", "node_modules", ".venv", "__pycache__", ".skillhex*")
+
+
+def _ignore_links_and_junk(root: Path):
+    """Skip junk dirs and every symlink: a link can point outside the workspace at real files."""
+    def ignore(d, names):
+        out = set(_JUNK(d, names))
+        for n in names:
+            if (Path(d) / n).is_symlink():
+                out.add(n)
+        return out
+    return ignore
+
+
+_SECRET_ENV = re.compile(r"(KEY|TOKEN|SECRET|PASSWORD|PASSWD|CREDENTIAL|AUTH)", re.I)
 
 
 def _dir_size(p: Path) -> int:
@@ -136,18 +154,24 @@ class HermesExecutor:
         if key:   # a custom executor endpoint keys through OPENAI_API_KEY in the scratch profile
             env_lines = [l for l in env_lines if not l.startswith("OPENAI_API_KEY=")] + [f"OPENAI_API_KEY={key}"]
         (home / ".env").write_text("\n".join(env_lines) + ("\n" if env_lines else ""))
-        plug_src = self.hermes_home / "plugins" / "skillhex"
-        if plug_src.exists():
+        # every base-profile plugin (provider plugins such as a subscription auth plugin must be present)
+        plugins_src = self.hermes_home / "plugins"
+        if plugins_src.is_dir():
             (home / "plugins").mkdir(exist_ok=True)
-            os.symlink(plug_src.resolve(), home / "plugins" / "skillhex")
+            for child in plugins_src.iterdir():
+                if child.name.startswith(".") or not (child.is_dir() or child.is_symlink()):
+                    continue
+                os.symlink(child.resolve(), home / "plugins" / child.name)
+        for name in ("auth.json",):   # provider credentials Hermes keeps outside .env
+            if (self.hermes_home / name).exists():
+                shutil.copy2(self.hermes_home / name, home / name)
         cfg = self._scratch_config()
         (home / "config.yaml").write_text(yaml.safe_dump(cfg, sort_keys=False) if yaml else json.dumps(cfg))
         workspace = attempt / "workspace"
         snap = self.root_episode.workspace_snapshot if self.root_episode else None
         source = snap if snap and Path(snap).is_dir() else task.cwd
         if source and Path(source).is_dir() and _dir_size(Path(source)) <= MAX_WORKSPACE_BYTES:
-            shutil.copytree(source, workspace, symlinks=True,
-                            ignore=shutil.ignore_patterns(".git", "node_modules", ".venv", "__pycache__", ".skillhex*"))
+            shutil.copytree(source, workspace, symlinks=False, ignore=_ignore_links_and_junk(Path(source)))
             if not snap and self.root_episode is not None:
                 restore_pristine(workspace, self.root_episode)
         else:
@@ -156,15 +180,22 @@ class HermesExecutor:
         self.last_attempt_dir = attempt
         return {"attempt": attempt, "home": home, "workspace": workspace, "capture": attempt / "capture"}
 
-    # ---- run ---------------------------------------------------------------------
-    def execute(self, skill_content: str, task: Task, node_id: str) -> ExecResult:
-        paths = self._prepare(skill_content, node_id, task)
-        env = dict(os.environ)
+    def _attempt_env(self, paths: Dict[str, Path]) -> Dict[str, str]:
+        """Inherited environment minus anything that looks like a credential. The scratch profile's own
+        .env carries what the attempt needs; nothing else from the parent process should leak into a run
+        that executes tools with --yolo."""
+        env = {k: v for k, v in os.environ.items() if not _SECRET_ENV.search(k) or k in ("HERMES_HOME",)}
         env.update({"HERMES_HOME": str(paths["home"]), "SKILLHEX_CAPTURE_DIR": str(paths["capture"]),
                     "SKILLHEX_FORCE_SKILL": self.skill, "HERMES_NO_UPDATE_CHECK": "1"})
         if self.replay_episode_dir:
             env["SKILLHEX_REPLAY"] = str(self.replay_episode_dir)
             env["SKILLHEX_REPLAY_MODE"] = self.replay_mode
+        return env
+
+    # ---- run ---------------------------------------------------------------------
+    def execute(self, skill_content: str, task: Task, node_id: str) -> ExecResult:
+        paths = self._prepare(skill_content, node_id, task)
+        env = self._attempt_env(paths)
         cmd = [self.hermes_bin, "chat", "-Q", "-q", task.prompt, "--yolo", "--in", str(paths["workspace"]),
                "--max-turns", str(self.max_turns), "--run-budget", str(self.run_budget)]
         started = time.time()
