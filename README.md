@@ -184,8 +184,11 @@ Unit tests: 138, no network. Live, on a deliberately poisoned notes skill (2026-
 | Qwen3 27B (local) acts, Muse reviews | checker | fixed in 2 attempts, applied |
 
 Before/after on five poisoned skills (CSV totals, log counting, semver bump, config units, notes),
-each measured with real agent runs graded by a checker: see [`eval/RESULTS.md`](eval/RESULTS.md).
-`eval/run_eval.py` reproduces it.
+each measured with real agent runs graded by a checker, once with Muse doing everything and once with
+Qwen3 27B acting and Muse reviewing: mean pass rate went from 50% and 60% before to 100% after in both
+runs, and every skill that was actually causing failures was repaired in two attempts. The two skills the
+models ignored anyway were left alone at zero cost. Full tables and caveats in
+[`eval/RESULTS.md`](eval/RESULTS.md); `eval/run_eval.py` reproduces it.
 
 Honest limits. The gain is the gate more than the search: even one tested candidate beats writing
 a skill from a failed transcript with no check. The paper's numbers come from benchmarks with
