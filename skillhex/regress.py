@@ -44,15 +44,19 @@ class SkillBank:
     def exists(self) -> bool:
         return bool(self.bank.list())
 
-    def absorb(self, run_bank: TestBank, task_prompt: str, run: str) -> int:
-        n = 0
+    def absorb(self, run_bank: TestBank, task_prompt: str, run: str, keep: Optional[set] = None) -> int:
+        """Persist run tests as the skill's regression suite. ``keep`` restricts to tests some version
+        actually satisfied; a test nothing ever passed is more likely wrong than a contract."""
+        kept = []
         for case in run_bank.list():
+            if keep is not None and case.id not in keep:
+                continue
             self.bank.add(case)
-            n += 1
+            kept.append(case.id)
         m = self.meta()
-        m["tasks"].append({"prompt": task_prompt, "run": run, "at": time.time(), "tests": [c.id for c in run_bank.list()]})
+        m["tasks"].append({"prompt": task_prompt, "run": run, "at": time.time(), "tests": kept})
         _atomic_write(self.meta_path, json.dumps(m, indent=2))
-        return n
+        return len(kept)
 
     def applies_to(self, prompt: str) -> bool:
         return any(similarity(t.get("prompt", ""), prompt) >= self.min_similarity for t in self.meta().get("tasks", []))

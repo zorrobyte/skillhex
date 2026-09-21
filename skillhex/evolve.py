@@ -191,7 +191,9 @@ def evolve_skill(home: Path, hermes_home: Path, skill: str, *, episode: Optional
         else:
             decision = f"keep original (best {best.score:.2f} vs root {root.score or 0:.2f}, passed={result.passed})"
     try:
-        SkillBank(home / "banks", skill).absorb(search.bank, task_prompt=task.prompt, run=str(run_dir))
+        satisfied = {t for t in search.matrix.tests()
+                     if (best is not None and search.matrix.get(best.id, t) == 1) or search.matrix.get(root.id, t) == 1}
+        SkillBank(home / "banks", skill).absorb(search.bank, task_prompt=task.prompt, run=str(run_dir), keep=satisfied)
     except Exception:  # noqa: BLE001
         log.debug("bank absorb failed", exc_info=True)
     applied = None

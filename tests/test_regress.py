@@ -53,3 +53,12 @@ def test_rollback_restores_previous_skill(tmp_path):
     assert (d / "SKILL.md").read_text() == "original"
     assert not (d / "SKILL.md.skillhex-prev").exists()
     assert rollback_skill(hh, "notes-cli") is False
+
+
+def test_absorb_keeps_only_listed_tests(tmp_path):
+    run_bank = TestBank(tmp_path / "run" / "tests")
+    run_bank.add(TestCase(id="t_good", hypothesis_ids=["H1"], assertion_strength="hard_contract", summary="s", script=PASS))
+    run_bank.add(TestCase(id="t_never_satisfied", hypothesis_ids=["H1"], assertion_strength="hard_contract", summary="s", script=FAIL))
+    sb = SkillBank(tmp_path / "banks", "notes-cli")
+    sb.absorb(run_bank, task_prompt="p", run="r", keep={"t_good"})
+    assert [c.id for c in sb.bank.list()] == ["t_good"]
