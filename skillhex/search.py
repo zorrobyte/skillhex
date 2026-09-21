@@ -46,6 +46,7 @@ class SearchConfig:
     c_puct: float = 1.4
     fpu: float = 0.1
     test_timeout: int = 180
+    early_stop_score: Optional[float] = None   # no-checker regime: stop once a node's evidence score reaches this
 
 
 @dataclass
@@ -283,6 +284,10 @@ class SkillSearch:
                     return self._result(True)
                 self._replay_tests(v)
                 self._rescore(v, 0)
+                if self.cfg.early_stop_score is not None and (v.score or 0) >= self.cfg.early_stop_score \
+                        and self.bank.list():
+                    log.info("early stop: node %s evidence score %.2f >= %.2f", v.id, v.score or 0, self.cfg.early_stop_score)
+                    return self._result(False)
             else:
                 log.info("expanding node %s", v.id)
                 self._expand(v)

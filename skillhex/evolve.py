@@ -171,8 +171,8 @@ def evolve_skill(home: Path, hermes_home: Path, skill: str, *, episode: Optional
     executor_model = executor_model or executor_model_from_env()
     executor = executor or HermesExecutor(hermes_home, skill, run_dir, replay_episode_dir=replay_dir, replay_mode=replay_mode,
                                           model_override=executor_model)
-    search = SkillSearch(run_dir / "search", task, initial, reflector or LLMReflector(llm), verifier or LLMVerifier(llm), executor,
-                         SearchConfig(K=budget))
+    cfg = SearchConfig(K=budget, early_stop_score=None if checker else min_score)
+    search = SkillSearch(run_dir / "search", task, initial, reflector or LLMReflector(llm), verifier or LLMVerifier(llm), executor, cfg)
     seed = None
     if episode is not None:
         seed = Episode.from_dict(episode.to_dict())

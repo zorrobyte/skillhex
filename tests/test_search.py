@@ -167,3 +167,17 @@ def test_candidates_failing_lint_are_not_expanded(tmp_path):
     assert result.passed
     contents = [n.content for n in s.tree.nodes.values()]
     assert "# no frontmatter" not in contents
+
+
+def test_early_stop_on_evidence_score_when_no_reward(tmp_path):
+    class NoReward(FakeExecutor):
+        def execute(self, content, task, node_id):
+            r = super().execute(content, task, node_id)
+            r.reward = 0
+            return r
+    ex = NoReward()
+    s = make_search(tmp_path, executor=ex, K=5, L=1, early_stop_score=0.9)
+    result = s.run()
+    assert not result.passed
+    assert result.best is not None and result.best.score >= 0.9 and "open-meteo" in result.best.content
+    assert ex.calls < 6
