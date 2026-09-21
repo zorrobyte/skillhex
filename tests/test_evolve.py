@@ -89,3 +89,20 @@ def test_bundled_skill_is_overridden_at_profile_level(tmp_path):
     assert res["decision"].startswith("apply")
     assert "open-meteo" in (hh / "skills" / "weather" / "SKILL.md").read_text()
     assert (bundled / "SKILL.md").read_text() == "skill: use wttr"
+
+
+def test_checker_grades_pending_episode_before_search(tmp_path):
+    home, hh = setup_home(tmp_path)
+    store = EpisodeStore(home / "episodes")
+    ep = store.load("weather", "ep0")
+    ep.outcome = None
+    ep.cwd = str(tmp_path / "ws")
+    (tmp_path / "ws").mkdir()
+    store.save(ep)
+    checker = tmp_path / "check.py"
+    checker.write_text("import sys; sys.exit(1)")
+    res = evolve_skill(home, hh, "weather", checker=str(checker), budget=5, llm=NoLLM(), executor=FakeExecutor(),
+                       reflector=ScriptedReflector(), verifier=ScriptedVerifier())
+    assert store.load("weather", "ep0").outcome == "fail"
+    assert store.load("weather", "ep0").outcome_source == "checker"
+    assert res["decision"].startswith("apply")

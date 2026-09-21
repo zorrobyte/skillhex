@@ -68,3 +68,10 @@ def test_policy_decides_live_replay_or_block():
     assert kind == "block" and "not in cassette" in msg
     permissive = ReplayPolicy(Cassette(cassette_episode()), mode="permissive")
     assert permissive.decide("terminal", {"command": "rm -rf /"}) == ("live", None)
+
+
+def test_episode_ids_are_filesystem_safe():
+    r = TurnRecorder()
+    r.skill_loaded("s", "x")
+    ep = r.finish_turn("s", turn_id="2026:abc/def", messages=[], model="m", cwd=None)[0]
+    assert ":" not in ep.id and "/" not in ep.id

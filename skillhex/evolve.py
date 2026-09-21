@@ -21,6 +21,7 @@ from .executors.hermes import HermesExecutor, find_skill_dir
 from .llm import OpenAICompatLLM, LLMConfig
 from .models import Episode
 from .reflect import LLMReflector
+from .regress import SkillBank
 from .search import SkillSearch, SearchConfig, Task, SearchResult
 from .verify import LLMVerifier
 
@@ -102,6 +103,21 @@ def _apply_skill(hermes_home: Path, skill: str, content: str, evidence: Dict[str
     return f"applied (backup at {backup.name}) -> {md}"
 
 
+def _grade_pending_with_checker(store: EpisodeStore, skill: str, checker: str) -> None:
+    """Episodes captured live have no verdict yet; a task checker can grade them from their workspace."""
+    import subprocess
+    for ep in store.list(skill):
+        if ep.outcome is not None or not ep.cwd or not Path(ep.cwd).is_dir():
+            continue
+        env = dict(os.environ, SKILLHEX_EPISODE=str(store.dir(skill, ep.id)), SKILLHEX_WORKSPACE=ep.cwd)
+        try:
+            proc = subprocess.run([sys.executable, checker], capture_output=True, text=True, timeout=120, env=env, cwd=ep.cwd)
+        except subprocess.TimeoutExpired:
+            continue
+        store.set_outcome(skill, ep.id, "pass" if proc.returncode == 0 else "fail", source="checker",
+                          note=(proc.stdout + proc.stderr).strip()[-300:])
+
+
 def _report(run_dir: Path, skill: str, task: Task, result: SearchResult, search: SkillSearch, decision: str, llm) -> Path:
     lines = [f"# skillhex run — {skill}", "", f"task: {task.prompt[:500]}", f"outcome: {'PASSED official check' if result.passed else 'no official pass'}",
              f"decision: {decision}", f"executor attempts: {result.executor_calls}", f"reflector usage: {llm.usage}", "",
@@ -121,6 +137,8 @@ def evolve_skill(home: Path, hermes_home: Path, skill: str, *, episode: Optional
                  executor_model: Optional[Dict[str, Any]] = None, llm=None, executor=None,
                  reflector=None, verifier=None) -> Dict[str, Any]:
     store = EpisodeStore(home / "episodes")
+    if episode is None and checker:
+        _grade_pending_with_checker(store, skill, checker)
     if episode is None:
         failed = store.list(skill, outcome="fail")
         if not failed and task_prompt is None:
@@ -158,6 +176,10 @@ def evolve_skill(home: Path, hermes_home: Path, skill: str, *, episode: Optional
             decision = f"apply (evidence score {best.score:.2f} ≥ {min_score}, no checker available)"
         else:
             decision = f"keep original (best {best.score:.2f} vs root {root.score or 0:.2f}, passed={result.passed})"
+    try:
+        SkillBank(home / "banks", skill).absorb(search.bank, task_prompt=task.prompt, run=str(run_dir))
+    except Exception:  # noqa: BLE001
+        log.debug("bank absorb failed", exc_info=True)
     applied = None
     if apply and decision.startswith("apply"):
         applied = _apply_skill(hermes_home, skill, best.content, {"run": str(run_dir), "node": best.id, "score": best.score,

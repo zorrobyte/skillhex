@@ -31,6 +31,7 @@ from skillhex.llm import extract_json
 from skillhex.models import Episode
 from skillhex.outcome import classify_followup, heuristic_followup
 from skillhex.replay import Cassette, ReplayPolicy
+from skillhex.regress import SkillBank, rollback_skill
 
 log = logging.getLogger("skillhex.plugin")
 
@@ -152,7 +153,12 @@ def _on_pre_llm_call(session_id: str = "", user_message: Any = None, is_first_tu
         last["resolved"] = True
         _write_pending_state()
         if verdict == "fail":
-            _maybe_schedule_evolution([s for s, _ in last["episodes"]])
+            for skill in last.get("regressed", []):
+                if rollback_skill(_hermes_home, skill):
+                    log.warning("skillhex: rolled back %s (bank regression + user fail)", skill)
+                    with open(_home / "rollbacks.jsonl", "a") as f:
+                        f.write(json.dumps({"skill": skill, "at": time.time(), "note": text[:200]}) + "\n")
+            _maybe_schedule_evolution([s for s, _ in last["episodes"] if s not in last.get("regressed", [])])
     return None
 
 
@@ -171,8 +177,18 @@ def _on_post_llm_call(session_id: str = "", turn_id: str = "", conversation_hist
             saved.append((ep.skill, ep.id))
         except Exception:  # noqa: BLE001
             log.debug("skillhex: episode save failed", exc_info=True)
+    regressed = []
+    for ep in eps:
+        try:
+            rec = SkillBank(_home / "banks", ep.skill).regress(ep, _store.dir(ep.skill, ep.id))
+            if rec and rec["hard_failures"]:
+                regressed.append(ep.skill)
+                log.warning("skillhex: regression on %s: hard failures %s", ep.skill, rec["hard_failures"])
+        except Exception:  # noqa: BLE001
+            log.debug("skillhex: regression check failed", exc_info=True)
     _last_by_session[session_id or ""] = {"episodes": saved, "prompt": _user_text(user_message) or (eps[0].user_prompt),
-                                          "answer": str(assistant_response or eps[0].final_response), "resolved": False}
+                                          "answer": str(assistant_response or eps[0].final_response), "resolved": False,
+                                          "regressed": regressed}
     _write_pending_state()
     return None
 

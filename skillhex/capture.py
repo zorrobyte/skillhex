@@ -2,6 +2,7 @@
 emits one Episode per skill that was loaded during the turn."""
 from __future__ import annotations
 
+import re
 import time
 import uuid
 from dataclasses import dataclass, field
@@ -51,7 +52,7 @@ class TurnRecorder:
             return []
         skills = st.skills or ([force_skill] if force_skill else [])
         eps = []
-        stamp = turn_id or f"{int(time.time())}-{uuid.uuid4().hex[:6]}"
+        stamp = re.sub(r"[^A-Za-z0-9_.-]+", "-", turn_id or f"{int(time.time())}-{uuid.uuid4().hex[:6]}")[:80]
         for name in skills:
             eps.append(Episode(id=f"{stamp}-{uuid.uuid4().hex[:4]}", skill=name, skill_version="",
                                task_id=st.task_id or "", messages=list(messages), tool_calls=list(st.tool_calls),
