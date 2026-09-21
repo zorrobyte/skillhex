@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import re
 from pathlib import Path
 from typing import Any, Dict, List, Optional
 
@@ -9,6 +10,22 @@ from .models import Episode
 from .search import ReflectionContext, ReflectionResult
 
 PROMPTS = Path(__file__).parent / "prompts"
+
+_FM = re.compile(r"^---\s*\n(.*?)\n---\s*\n?", re.S)
+
+
+def force_skill_name(md: str, skill: str) -> str:
+    """A candidate must keep the host-visible skill name or it will not auto-load."""
+    m = _FM.match(md)
+    if not m:
+        desc = "Evolved skill."
+        return f"---\nname: {skill}\ndescription: {desc}\n---\n{md.lstrip()}"
+    fm = m.group(1)
+    if re.search(r"^name:\s*.*$", fm, re.M):
+        fm = re.sub(r"^name:\s*.*$", f"name: {skill}", fm, count=1, flags=re.M)
+    else:
+        fm = f"name: {skill}\n" + fm
+    return f"---\n{fm}\n---\n" + md[m.end():]
 
 
 def render_transcript(ep: Optional[Episode], max_result_chars: int = 1500, max_msg_chars: int = 3000) -> str:
@@ -71,6 +88,7 @@ class LLMReflector:
             md = c.get("skill_md") or c.get("content") or ""
             if not md.strip():
                 continue
+            md = force_skill_name(md, ctx.task.skill)
             intent = c.get("edit_intent") or {}
             summary = intent.get("primary_failure_mode") or c.get("notes") or f"candidate {i}"
             cands.append({"content": md, "rank": int(c.get("rank") or i), "summary": str(summary)[:200],

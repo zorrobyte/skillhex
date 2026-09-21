@@ -64,7 +64,7 @@ def test_reflector_maps_reply_and_prompt_has_evidence(tmp_path):
     res = r.reflect(c, must_emit=True)
     assert res.decision == "emit_patch"
     assert [p["rank"] for p in res.patch_candidates] == [2, 1]
-    assert res.patch_candidates[1]["content"] == "# weather\nUse NWS."
+    assert res.patch_candidates[1]["content"].endswith("# weather\nUse NWS.")
     assert res.patch_candidates[1]["hypothesis"] == "H1"
     assert res.hypothesis_ops[0]["op"] == "add"
     system, user = llm.prompts[0]
@@ -124,3 +124,15 @@ def test_verifier_drops_cases_with_missing_fields(tmp_path):
     llm = FakeLLM({"cases": [{"test_id": "x"}, VERIFIER_REPLY["cases"][0]]})
     cases = LLMVerifier(llm).generate(c, c.hypotheses.active())
     assert [t.id for t in cases] == ["t_fourteen_rows"]
+
+
+def test_reflector_forces_frontmatter_name_to_task_skill(tmp_path):
+    from skillhex.reflect import force_skill_name
+    md = "---\nname: weather-forecast\ndescription: x.\n---\n# body"
+    assert force_skill_name(md, "weather").startswith("---\nname: weather\n")
+    assert force_skill_name("# no frontmatter", "weather").startswith("---\nname: weather\ndescription:")
+    c = ctx(tmp_path)
+    reply = dict(REFLECTION_REPLY)
+    reply["patch_candidates"] = [{"rank": 1, "hypothesis": "H1", "skill_md": "---\nname: renamed\n---\n# w"}]
+    res = LLMReflector(FakeLLM(reply)).reflect(c, must_emit=True)
+    assert res.patch_candidates[0]["content"].startswith("---\nname: weather\n")

@@ -67,6 +67,19 @@ def build_llm(hermes_home: Path, role: str = "reflector") -> OpenAICompatLLM:
     return OpenAICompatLLM(LLMConfig(base_url=base, api_key=key, model=model, reasoning_effort=effort or None))
 
 
+def executor_model_from_env() -> Optional[Dict[str, Any]]:
+    """SKILLHEX_EXECUTOR_MODEL / _BASE_URL / _PROVIDER let attempts run on a cheaper (or weaker) model than reflection."""
+    model = os.environ.get("SKILLHEX_EXECUTOR_MODEL")
+    if not model:
+        return None
+    over: Dict[str, Any] = {"default": model}
+    if os.environ.get("SKILLHEX_EXECUTOR_BASE_URL"):
+        over["base_url"] = os.environ["SKILLHEX_EXECUTOR_BASE_URL"]
+        over["provider"] = os.environ.get("SKILLHEX_EXECUTOR_PROVIDER", "custom")
+        over["api_mode"] = "chat_completions"
+    return over
+
+
 def _apply_skill(hermes_home: Path, skill: str, content: str, evidence: Dict[str, Any]) -> str:
     """Write the winning SKILL.md into the profile, through the Hermes ledger when importable."""
     src = find_skill_dir(skill, hermes_home)
@@ -155,6 +168,7 @@ def evolve_skill(home: Path, hermes_home: Path, skill: str, *, episode: Optional
     run_dir.mkdir(parents=True, exist_ok=True)
     llm = llm or build_llm(hermes_home)
     replay_dir = store.dir(skill, episode.id) if episode and store.exists(skill, episode.id) else None
+    executor_model = executor_model or executor_model_from_env()
     executor = executor or HermesExecutor(hermes_home, skill, run_dir, replay_episode_dir=replay_dir, replay_mode=replay_mode,
                                           model_override=executor_model)
     search = SkillSearch(run_dir / "search", task, initial, reflector or LLMReflector(llm), verifier or LLMVerifier(llm), executor,
@@ -196,6 +210,7 @@ def evolve_skill(home: Path, hermes_home: Path, skill: str, *, episode: Optional
 
 
 def cli_entry(args, home: Path, hermes_home: Path, min_score: float = 0.8, replay_mode: str = "permissive") -> int:
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(name)s %(levelname)s %(message)s", stream=sys.stderr)
     store = EpisodeStore(home / "episodes")
     action = getattr(args, "action", "status")
     if action == "status":

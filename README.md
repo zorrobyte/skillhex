@@ -93,7 +93,7 @@ HERMES_HOME=~/skillhex-home hermes skillhex report
 
 - Rows are (skill version, episode) so a skill is scored on every recorded episode, not one task.
 - Tests belong to the skill and travel with it as a regression suite.
-- The original skill and the no-skill baseline are rows in the matrix, always.
+- The original skill is always a row in the matrix; a no-skill baseline row is planned.
 - Static lint (frontmatter, referenced binaries) gates before an attempt is spent.
 - Outcome from user corrections and checkers only. The acting model's self-report is never a reward.
 

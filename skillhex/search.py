@@ -201,6 +201,7 @@ class SkillSearch:
                     feedback.append(f"{case.id}: {msg}")
                     continue
                 self.bank.add(case)
+                log.info("accepted test %s [%s] for %s", case.id, case.assertion_strength, ",".join(case.hypothesis_ids))
                 for hid in case.hypothesis_ids:
                     try:
                         self.hypotheses.link_test(hid, case.id)
@@ -261,8 +262,10 @@ class SkillSearch:
                 break
             v = self.tree.get(vid)
             if not v.evaluated:
+                log.info("attempt %d/%d: executing node %s (%s)", k + 1, self.cfg.K, v.id, v.summary[:80])
                 r = self._execute(v)
                 k += 1
+                log.info("node %s official=%s", v.id, "PASS" if r == 1 else "FAIL")
                 if r == 1:
                     self._replay_tests(v)
                     self._rescore(v, 1)
@@ -270,7 +273,9 @@ class SkillSearch:
                 self._replay_tests(v)
                 self._rescore(v, 0)
             else:
+                log.info("expanding node %s", v.id)
                 self._expand(v)
+                log.info("tree:\n%s", self.tree.render())
         return self._result(False)
 
     def _result(self, passed: bool) -> SearchResult:

@@ -17,6 +17,9 @@ Each test is a standalone Python 3 script (stdlib only). It runs with environmen
 }
 The last assistant message is the attempt's final answer. Files the attempt wrote live under `cwd` if set. Tests may call public network services when a hypothesis is about a public source, but must time out within 20 seconds and treat network failure as FAIL.
 
+# POLARITY (critical)
+A test asserts a property a CORRECT attempt must have. `SELF_VERIFIER_RESULT=PASS` means the recorded attempt satisfies that property; `FAIL` means it does not. Never write a test that passes when the failure is present. A hypothesis that explains the failure is therefore SUPPORTED when its tests FAIL on the failing attempt and PASS on a fixed one. Example: for the hypothesis "the agent never used the archived-inclusive flag", the test checks that an archived-inclusive flag WAS used and prints PASS only then.
+
 # ASSERTION STRENGTH
 hard_contract (explicit deliverable requirement: path, schema, format, count, field) · environment_preflight (tool/command/import availability) · deterministic_oracle (value recomputed independently from public inputs or a public tool) · proxy_quality (baseline, threshold, robustness proxy) · diagnostic (weak signal for reflection only).
 
