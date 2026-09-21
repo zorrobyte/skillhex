@@ -89,3 +89,13 @@ def test_remove_deletes_test_dir(tmp_path):
     bank.remove("t_terminal_used")
     assert bank.list() == []
     assert not (tmp_path / "bank" / "t_terminal_used").exists()
+
+
+def test_bank_with_relative_root_still_runs_scripts(tmp_path, monkeypatch):
+    monkeypatch.chdir(tmp_path)
+    store, e = ep(tmp_path)
+    bank = TestBank("relbank")
+    ok, msg = bank.validate(case("t_rel", script=PASS_SCRIPT), store.dir("s", "e1"))
+    assert ok, msg
+    bank.add(case("t_rel", script=PASS_SCRIPT))
+    assert bank.run("t_rel", store.dir("s", "e1")) == 1

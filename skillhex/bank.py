@@ -46,7 +46,7 @@ class TestCase:
 class TestBank:
     __test__ = False
     def __init__(self, root: Path | str, timeout: int = 180, python: Optional[str] = None):
-        self.root = Path(root)
+        self.root = Path(root).resolve()
         self.timeout = timeout
         self.python = python or sys.executable
 
@@ -75,8 +75,8 @@ class TestBank:
     def _execute(self, script_path: Path, episode_dir: Path) -> Tuple[Optional[int], str]:
         env = {"SKILLHEX_EPISODE": str(episode_dir), "PATH": "/usr/bin:/bin:/usr/local/bin", "HOME": str(Path.home())}
         try:
-            proc = subprocess.run([self.python, str(script_path)], capture_output=True, text=True,
-                                  timeout=self.timeout, cwd=str(episode_dir), env=env)
+            proc = subprocess.run([self.python, str(Path(script_path).resolve())], capture_output=True, text=True,
+                                  timeout=self.timeout, cwd=str(Path(episode_dir).resolve()), env=env)
         except subprocess.TimeoutExpired:
             return None, "timeout"
         out = proc.stdout + "\n" + proc.stderr

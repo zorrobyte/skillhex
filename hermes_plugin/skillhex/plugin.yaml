@@ -1,0 +1,32 @@
+name: skillhex
+version: 0.1.0
+description: "Evidence-gated skill evolution: captures skill-guided attempts, tests failure hypotheses, searches over skill patches, applies only what the evidence supports."
+author: "Ross Fisher (@zorrobyte), Claude"
+license: MIT
+provides_hooks:
+  - on_skill_lifecycle
+  - post_tool_call
+  - pre_tool_call
+  - pre_llm_call
+  - post_llm_call
+  - on_session_end
+provides_tools: []
+python_dependencies:
+  - "skillhex>=0.1,<1"
+config_schema:
+  auto_evolve:
+    type: bool
+    default: true
+    description: "Start an evolution run in the background after a skill-guided turn is judged to have failed."
+  replay_mode:
+    type: str
+    default: permissive
+    description: "Cassette replay policy for evaluation attempts: permissive (unmatched calls run live) or strict (blocked)."
+  classify_followups:
+    type: bool
+    default: true
+    description: "Use the host model to judge whether the user's next message says the previous skill-guided answer failed."
+  min_score_to_apply:
+    type: float
+    default: 0.8
+    description: "Without a checker, a candidate must reach this evidence score (and beat the original) before it is applied."

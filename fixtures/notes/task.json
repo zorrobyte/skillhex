@@ -1,0 +1,1 @@
+{"prompt": "There is a notes tool in this directory (notes.py). Using it, work out the total number of notes I have, including archived ones, and write just that integer to answer.txt in this directory. Load the notes-cli skill first.", "checker": "checker.py", "expected": "7"}
