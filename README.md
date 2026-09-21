@@ -32,7 +32,11 @@ earn its place:
    Writes go through the host's skill ledger and are rollback-able. The original row (no
    patch) stays in the matrix forever, so a patch that scores below it is visibly worse.
 
-Nothing asks the user for anything. It just runs.
+Nothing asks the user for anything. It just runs: a failed skill-guided turn is detected from
+the user's next message, the evolution runs as a detached background process, and the winner is
+applied (or not) on the evidence. Session state persists on disk, so this works across CLI
+`--resume` and gateway restarts. Without a checker the search stops early once a candidate reaches
+the apply threshold on the evidence, so it does not burn the whole budget on an already-fixed skill.
 
 ## Layout
 
