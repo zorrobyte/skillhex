@@ -104,9 +104,17 @@ HERMES_HOME=~/skillhex-home hermes skillhex report
 
 ## Status
 
-Core and plugin are implemented and unit tested. The Hermes executor and the plugin have been
-exercised live against Muse Spark 1.3 (reflection, verification and attempts) on the notes fixture. SkillsBench reproduction and
-SkillFlow transfer evaluation are next.
+Core and plugin are implemented and unit tested (102 tests, no network). Three live runs on the
+notes fixture (2026-09-21), reflection and verification on Muse Spark 1.3 in every case:
+
+| run | executor | outcome source | attempts | result |
+|---|---|---|---|---|
+| manual, checker | Muse | checker grades the captured episode | 1 | official pass, applied via ledger |
+| autonomous, no checker | Muse | user's next message ("No, that's wrong…") classified by the host model | 1 | evidence 1.00 vs 0.00 for the original, early stop, applied; six tests banked and re-run on the next use |
+| weak model, checker | Qwen3.8-27B (local vLLM) | checker | 2 (root + 1) | official pass, applied |
+
+Each run used about 22k reflector tokens. Next: SkillsBench reproduction, SkillFlow transfer
+evaluation, a no-skill baseline row, and per-hypothesis discriminative test selection.
 
 ## License
 
