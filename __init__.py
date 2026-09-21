@@ -352,8 +352,8 @@ def register(ctx) -> None:
     try:
         ctx.register_auxiliary_task(
             "skillhex_reflector", display_name="SkillHEX reviewer",
-            description="Writes failure hypotheses, self-verifier tests and skill patches after a skill-guided "
-                        "turn fails. Pick a stronger tier than the acting model when you can; blank = main model.",
+            description="Reviews a failed skill-guided turn: writes failure hypotheses, self-verifier tests and "
+                        "skill patches. Pick a stronger tier than the acting model when you can; blank = main model.",
             defaults={"timeout": 300})
         ctx.register_auxiliary_task(
             "skillhex_executor", display_name="SkillHEX executor",
