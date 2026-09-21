@@ -54,3 +54,17 @@ def test_build_llm_still_honours_an_explicit_custom_endpoint(tmp_path, monkeypat
     monkeypatch.setenv("SKILLHEX_MODEL", "m")
     llm = build_llm(hh)
     assert not isinstance(llm, HermesAuxLLM) and llm.cfg.base_url == "https://x.example/v1"
+
+
+def test_build_llm_exports_the_profiles_env_file_for_hermes_routing(tmp_path, monkeypatch):
+    """A bare `python -m skillhex.evolve` (eval harness, cron) never went through the hermes CLI, so the
+    profile's .env was never loaded; the reviewer then had no provider key."""
+    hh = tmp_path / "hermes"
+    hh.mkdir()
+    (hh / "config.yaml").write_text("model:\n  provider: custom\n  default: m\n  base_url: https://x/v1\n")
+    (hh / ".env").write_text("OPENAI_API_KEY=from-profile\nSOME_OTHER=1\n")
+    monkeypatch.delenv("OPENAI_API_KEY", raising=False)
+    monkeypatch.delenv("SOME_OTHER", raising=False)
+    monkeypatch.setattr(aux, "call_llm", _fake_call_llm([]))
+    build_llm(hh)
+    assert os.environ.get("OPENAI_API_KEY") == "from-profile" and os.environ.get("SOME_OTHER") == "1"

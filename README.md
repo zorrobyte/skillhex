@@ -197,6 +197,44 @@ single-model mode the same model writes them. That is better than self-grading, 
 ground truth. Frontier models also sometimes ignore a bad skill and get the answer right anyway,
 which limits what a rewrite can add.
 
+## What an adversarial review found
+
+I had a second model (Codex, gpt-6-astra) review the code and the evaluation with instructions to assume the
+author was fooling themselves. Most of what it found was real and is fixed; the rest is stated here so you
+can decide for yourself.
+
+Fixed on 2026-09-21: the background worker couldn't import its own package on a clean install (the dev
+environment masked it); the reviewer only worked with custom OpenAI-style endpoints, so a profile using a
+subscription plugin or OAuth provider would have failed (it now routes through Hermes's own auxiliary
+client); skills that Hermes auto-loads were never captured (they fire the lifecycle hook without a session
+id); every skill ever loaded in a session got blamed for every failure; multi-turn sessions replayed the
+first prompt instead of the current one; the keyword fallback read "explain error handling" as a failure;
+the worker lock never checked whether the worker was alive; and it would rewrite skills Hermes itself refuses
+to touch autonomously. That last one matters: skillhex now follows Hermes's ownership rule. It applies
+changes on its own only to skills the agent created (curator-managed). Pinned, bundled, hub-installed,
+external, and user-written skills are staged for `/skills approve` instead, unless you set
+`apply_to_user_skills: true`.
+
+Still true, by design or because it can't be fixed without ground truth:
+
+- **Without a checker, the gate is model-graded.** The reviewer writes both the tests and the rewrites. A
+  reviewer that writes a cosmetic test and a rewrite that satisfies it would pass the gate. The tests have
+  to run against a real attempt's recorded output, the original is always in the matrix, and a later
+  regression plus your "that's wrong" rolls the change back, but none of that is proof. If you have a
+  checker, use it. If you don't, treat a no-checker change as provisional; the agent will tell you it
+  happened.
+- **A throwaway profile is not a sandbox.** Evaluation attempts run with `--yolo` in a fresh profile
+  against a copy of your files, with inherited credentials scrubbed from the environment, symlinks not
+  copied, and network tool results replayed from the recording. Terminal commands in an attempt still run on
+  your machine. Reviewer-written tests run with a throwaway HOME but no filesystem or network sandbox. Point
+  the executor at a machine you don't mind being wrong on if that worries you.
+- **Replay is partial.** Only web and browser tool results are replayed; anything else runs live in the
+  copy. A skill that must hit an authenticated API during evaluation will hit it.
+- **Silence teaches nothing.** If you never reply after a skill-guided answer, the turn stays unjudged and
+  nothing happens. Only a failure verdict triggers work.
+- **The evaluation is small.** Five fixtures, two attempts per condition. It shows direction, not a
+  percentage you should quote.
+
 ## Under the hood
 
 This is an implementation of [SkillHEX (Feng et al., 2026)](https://arxiv.org/abs/2608.05628),

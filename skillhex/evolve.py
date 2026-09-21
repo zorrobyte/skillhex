@@ -105,6 +105,10 @@ def build_llm(hermes_home: Path, role: str = "reflector"):
     authenticate works (subscription plugins, OAuth, pooled credentials). Last resort: the main model's
     custom base_url."""
     os.environ["HERMES_HOME"] = str(hermes_home)
+    # A worker started outside the hermes CLI (eval harness, cron) never had the profile's .env loaded;
+    # Hermes's provider auth reads the process environment, so export it (never overriding what is set).
+    for k, v in _read_env_file(hermes_home / ".env").items():
+        os.environ.setdefault(k, v)
     env = _runtime_env(hermes_home)
     cfg = _load_config(hermes_home)
     aux = _aux_block(cfg, REFLECTOR_TASK, env)
