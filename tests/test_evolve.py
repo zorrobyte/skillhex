@@ -151,3 +151,11 @@ def test_evolve_records_the_change_and_writes_an_html_report(tmp_path):
     rec = ChangeLog(home / "changes.jsonl").recent()[0]
     assert rec["skill"] == "weather" and rec["kind"] == "applied" and rec["run"] == res["run"]
     assert res["html"] == str(Path(res["run"]) / "report.html")
+
+
+def test_cli_status_on_an_empty_profile_says_so(tmp_path, capsys):
+    from skillhex.evolve import cli_entry
+    import types
+    rc = cli_entry(types.SimpleNamespace(action="status", skill=None), home=tmp_path / "sx", hermes_home=tmp_path / "hh")
+    out = capsys.readouterr().out
+    assert rc == 0 and "no skill-guided turns captured yet" in out

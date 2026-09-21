@@ -322,6 +322,8 @@ def cli_entry(args, home: Path, hermes_home: Path, min_score: float = 0.8, repla
     store = EpisodeStore(home / "episodes")
     action = getattr(args, "action", "status")
     if action == "status":
+        if not store.skills():
+            print(f"skillhex: no skill-guided turns captured yet (home {home})")
         for s in store.skills():
             eps = store.list(s)
             print(f"{s}: {len(eps)} episodes, {len([e for e in eps if e.outcome == 'fail'])} failed, {len([e for e in eps if e.outcome is None])} pending")
